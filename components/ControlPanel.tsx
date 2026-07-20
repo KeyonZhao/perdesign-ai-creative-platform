@@ -98,11 +98,7 @@ export function ControlPanel(props: ControlPanelProps) {
             onChange={(event) => props.setRequirement(event.target.value)}
             placeholder="例如：不改变原有结构比例，优化外观细节，提升科技感和高级感，增加更强的品牌识别特征，KeyShot真实产品渲染质感。"
           />
-          {!props.hasChatConfig ? (
-            <p className="text-xs leading-5 text-amber-200/80">
-              当前未填写对话 Key，暂时无法使用 AI 优化提示词。
-            </p>
-          ) : null}
+          {!props.hasChatConfig ? <p className="text-xs leading-5 text-amber-200/80">当前未完成认证，暂时无法使用 AI 优化提示词。</p> : null}
         </label>
 
         <div className="space-y-3">

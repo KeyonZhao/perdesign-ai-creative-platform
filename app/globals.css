@@ -703,6 +703,13 @@ textarea {
   padding-top: 2px;
 }
 
+.api-inline-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 68px;
+}
+
 .api-save-button {
   display: inline-flex;
   height: 44px;

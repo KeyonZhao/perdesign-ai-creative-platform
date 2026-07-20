@@ -13,6 +13,7 @@ const conceptSchema = z.object({
 
 const conceptListSchema = z.array(conceptSchema);
 const IMAGE_DEBUG_LOG = `${process.cwd()}/logs/image-api-debug.log`;
+const IMAGE_FETCH_RETRY_DELAYS_MS = [800, 1800];
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -315,11 +316,18 @@ export async function callImageEdit(params: {
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${params.apiKey}` },
-      body: formData
-    });
+    response = await fetchWithRetry(
+      () =>
+        fetch(endpoint, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${params.apiKey}` },
+          body: formData
+        }),
+      {
+        endpoint,
+        source: "images/edits"
+      }
+    );
   } catch (error) {
     await writeImageDebugLog({
       phase: "network_error",
@@ -386,22 +394,29 @@ export async function callImageGeneration(params: {
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: params.imageModel,
-        prompt: params.prompt,
-        n: 1,
-        ...(params.size !== "auto" ? { size: params.size } : {}),
-        ...(params.quality !== "auto" ? { quality: params.quality } : {}),
-        output_format: "png",
-        response_format: "b64_json"
-      })
-    });
+    response = await fetchWithRetry(
+      () =>
+        fetch(endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${params.apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: params.imageModel,
+            prompt: params.prompt,
+            n: 1,
+            ...(params.size !== "auto" ? { size: params.size } : {}),
+            ...(params.quality !== "auto" ? { quality: params.quality } : {}),
+            output_format: "png",
+            response_format: "b64_json"
+          })
+        }),
+      {
+        endpoint,
+        source: "images/generations"
+      }
+    );
   } catch (error) {
     await writeImageDebugLog({
       phase: "network_error",
@@ -624,6 +639,48 @@ function summarizeHeaders(headers: Headers) {
     if (value) summary[key] = value;
   }
   return summary;
+}
+
+async function fetchWithRetry(
+  execute: () => Promise<Response>,
+  context: { endpoint: string; source: "images/edits" | "images/generations" }
+) {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= IMAGE_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await execute();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableFetchError(error) || attempt === IMAGE_FETCH_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+
+      const retryAfterMs = IMAGE_FETCH_RETRY_DELAYS_MS[attempt];
+      await writeImageDebugLog({
+        phase: "retry_scheduled",
+        source: context.source,
+        endpoint: context.endpoint,
+        attempt: attempt + 1,
+        retryAfterMs,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      await sleep(retryAfterMs);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("未知网络错误");
+}
+
+function isRetryableFetchError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return error.name === "TypeError" || message.includes("fetch failed") || message.includes("network");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>) {
