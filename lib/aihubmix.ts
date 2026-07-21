@@ -270,8 +270,9 @@ export async function callImageEdit(params: {
   apiKey: string;
   imageModel: string;
   inputImages: string[];
+  maskImage?: string;
   prompt: string;
-  referenceWeight?: number;
+  innovationLevel?: number;
   hasProductImage?: boolean;
   hasReference?: boolean;
   size: string;
@@ -291,6 +292,10 @@ export async function callImageEdit(params: {
     const imageBlob = new Blob([Buffer.from(image.split(",")[1], "base64")], { type: getDataUrlMime(image) });
     formData.append("image", imageBlob, `input-image-${index + 1}.png`);
   });
+  if (params.maskImage) {
+    const maskBlob = new Blob([Buffer.from(params.maskImage.split(",")[1], "base64")], { type: "image/png" });
+    formData.append("mask", maskBlob, "edit-mask.png");
+  }
   formData.append("prompt", buildImageEditPrompt(params.prompt, params));
   formData.append("n", "1");
   if (params.size !== "auto") formData.append("size", params.size);
@@ -309,8 +314,9 @@ export async function callImageEdit(params: {
     quality: params.quality,
     hasProductImage: Boolean(params.hasProductImage),
     hasReference: Boolean(params.hasReference),
-    referenceWeight: params.referenceWeight ?? 0,
+    innovationLevel: params.innovationLevel ?? 50,
     inputImageCount: params.inputImages.length,
+    hasMask: Boolean(params.maskImage),
     promptPreview: clipText(params.prompt, 500)
   });
 
@@ -373,12 +379,12 @@ export async function callImageGeneration(params: {
   apiKey: string;
   imageModel: string;
   prompt: string;
-  referenceWeight?: number;
-  hasReference?: boolean;
+  innovationLevel?: number;
   size: string;
   quality: string;
 }) {
   const endpoint = `${resolveBaseUrl(params.baseUrl)}/images/generations`;
+  const generationPrompt = buildImageGenerationPrompt(params.prompt, params.innovationLevel);
   await writeImageDebugLog({
     phase: "request",
     source: "images/generations",
@@ -387,9 +393,8 @@ export async function callImageGeneration(params: {
     model: params.imageModel,
     size: params.size,
     quality: params.quality,
-    hasReference: Boolean(params.hasReference),
-    referenceWeight: params.referenceWeight ?? 0,
-    promptPreview: clipText(params.prompt, 500)
+    innovationLevel: params.innovationLevel ?? 50,
+    promptPreview: clipText(generationPrompt, 500)
   });
 
   let response: Response;
@@ -404,7 +409,7 @@ export async function callImageGeneration(params: {
           },
           body: JSON.stringify({
             model: params.imageModel,
-            prompt: params.prompt,
+            prompt: generationPrompt,
             n: 1,
             ...(params.size !== "auto" ? { size: params.size } : {}),
             ...(params.quality !== "auto" ? { quality: params.quality } : {}),
@@ -459,22 +464,28 @@ export async function callImageGeneration(params: {
 
 function buildImageEditPrompt(
   prompt: string,
-  options: { hasProductImage?: boolean; hasReference?: boolean; referenceWeight?: number }
+  options: { hasProductImage?: boolean; hasReference?: boolean; innovationLevel?: number; maskImage?: string }
 ) {
   const parts: string[] = [];
-  const weight = Math.max(0, Math.min(100, options.referenceWeight ?? 0));
+  const innovationLevel = Math.max(0, Math.min(100, options.innovationLevel ?? 50));
   const trimmedPrompt = prompt.trim();
+
+  if (options.maskImage) {
+    parts.push("A PNG edit mask is attached. Change only the transparent pixels selected by the mask.");
+    parts.push("Keep every opaque, unmasked pixel visually unchanged. Preserve the exact composition, geometry, camera, background, lighting, materials, and details outside the selected area.");
+  }
 
   if (options.hasProductImage && options.hasReference) {
     parts.push("Input image order: image 1 is the source product image. image 2 is the reference style image.");
-    parts.push("Keep the main structure, proportions, and viewpoint of image 1.");
-    parts.push(buildReferenceWeightInstruction(weight));
+    parts.push(buildProductInnovationInstruction(innovationLevel));
+    parts.push(buildReferenceOnlyInstruction());
   } else if (options.hasProductImage) {
-    parts.push("Use the input image as the source product. Keep its main structure, proportions, and viewpoint.");
+    parts.push("Use the input image as the source product.");
+    parts.push(buildProductInnovationInstruction(innovationLevel));
   } else if (options.hasReference) {
-    parts.push("Use the input image as a real visual reference.");
-    parts.push(buildReferenceWeightInstruction(weight));
-    parts.push("Do not simply recreate the reference image subject unless the user explicitly asks for that.");
+    parts.push("Use the input image only as a visual style reference.");
+    parts.push(buildReferenceOnlyInstruction());
+    parts.push(buildTextInnovationInstruction(innovationLevel));
   }
 
   if (trimmedPrompt) {
@@ -488,6 +499,43 @@ function buildImageEditPrompt(
   }
 
   return parts.join("\n");
+}
+
+function buildImageGenerationPrompt(prompt: string, innovationLevel = 50) {
+  return [
+    buildTextInnovationInstruction(Math.max(0, Math.min(100, innovationLevel))),
+    `User description (keep this intent exactly, do not rewrite it): ${prompt.trim()}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildProductInnovationInstruction(level: number) {
+  if (level <= 20) {
+    return "Innovation level is low. Preserve the source product category, functional architecture, primary geometry, proportions, silhouette, and camera viewpoint. Limit changes to CMF, surface treatment, fine detailing, and minor segmentation.";
+  }
+  if (level <= 40) {
+    return "Innovation level is restrained. Preserve the product category, functional structure, key proportions, and recognizable identity. Allow moderate changes to surface segmentation, secondary volumes, details, and CMF.";
+  }
+  if (level <= 60) {
+    return "Innovation level is balanced. Preserve the product category, core function, and a few recognizable identity cues, while allowing clear changes to silhouette, secondary proportions, volume transitions, segmentation, details, and CMF.";
+  }
+  if (level <= 80) {
+    return "Innovation level is high. Keep only the product category and core functional logic. Allow major redesign of silhouette, proportions, primary volumes, structural expression, segmentation, details, and camera viewpoint.";
+  }
+  return "Innovation level is very high. Use the source product only to understand its category and essential function. Do not copy its silhouette, proportions, geometry, surface segmentation, or camera viewpoint. Create an original and clearly differentiated product form.";
+}
+
+function buildReferenceOnlyInstruction() {
+  return "Use the reference image exclusively for CMF, materials, finish, color strategy, detail density, edge treatment, and design mood. Never copy its subject identity, product silhouette, geometry, proportions, structural layout, composition, or camera viewpoint.";
+}
+
+function buildTextInnovationInstruction(level: number) {
+  if (level <= 20) return "Use a conservative, highly manufacturable design direction with familiar proportions and restrained detailing.";
+  if (level <= 40) return "Use a restrained innovation direction with recognizable product logic and selective new detailing.";
+  if (level <= 60) return "Balance feasibility with noticeable formal innovation, differentiated proportions, and a clear design identity.";
+  if (level <= 80) return "Explore a bold redesign with unconventional volumes, proportions, segmentation, and a strong original identity.";
+  return "Pursue a radical, highly original product concept with a new silhouette, structural expression, proportions, and interaction between volumes while retaining plausible function.";
 }
 
 export function mergeReferenceStyleIntoPrompt(prompt: string, referenceStyleSummary?: string) {

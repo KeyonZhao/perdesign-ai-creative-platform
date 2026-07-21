@@ -28,6 +28,20 @@ export function downloadDataUrl(dataUrl: string, filename: string) {
   link.remove();
 }
 
+export function prepareImageFileDrag(dataTransfer: DataTransfer, dataUrl: string, filename: string) {
+  const blob = dataUrlToBlob(dataUrl);
+  const objectUrl = URL.createObjectURL(blob);
+  dataTransfer.effectAllowed = "copy";
+  dataTransfer.setData("DownloadURL", `${blob.type || "image/png"}:${filename}:${objectUrl}`);
+  dataTransfer.setData("text/uri-list", objectUrl);
+  return objectUrl;
+}
+
+export function releaseImageFileDrag(objectUrl: string | null) {
+  if (!objectUrl) return;
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 3000);
+}
+
 export function getDataUrlMime(dataUrl: string) {
   return dataUrl.match(/^data:(.*?);base64,/)?.[1] || "image/png";
 }

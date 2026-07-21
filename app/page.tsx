@@ -9,15 +9,28 @@ import {
   Plus,
   PlugZap,
   SendHorizontal,
-  Sparkles
+  Sparkles,
+  X
 } from "lucide-react";
 import { ControlPanel } from "@/components/ControlPanel";
 import { Gallery } from "@/components/Gallery";
 import { Toast } from "@/components/Toast";
+import {
+  clearLocalGenerationBatches,
+  getLocalGalleryStats,
+  loadLocalGenerationBatches,
+  replaceLocalGenerationBatches,
+  requestPersistentLocalStorage,
+  saveLocalGenerationBatch,
+  type LocalGalleryStats
+} from "@/lib/local-gallery";
+import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
 import type {
   GenerationBatch,
   GenerationResult,
+  GenerationSourceImage,
   GenerationStatus,
+  GenerationType,
   ToastMessage,
   UploadedImage
 } from "@/lib/types";
@@ -34,13 +47,14 @@ const storageKeys = {
   count: "product-workstation-count",
   size: "product-workstation-size",
   quality: "product-workstation-quality",
-  referenceWeight: "product-workstation-reference-weight"
+  innovationLevel: "product-workstation-innovation-level"
 };
 
 const BRAIN_MODEL = "gpt-5.5";
 const AUTH_CODE = "perdesignsg";
 const DEFAULT_IMAGE_API_BASE_URL = "https://img-cn.65535.space/v1";
 const DEFAULT_CHAT_API_BASE_URL = "https://api-cn.65535.space/v1";
+const SCENE_GENERATION_PROMPT = "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图";
 const PRESET_CHAT_API_KEY = "sk-c851cbf75adaf19548d7bca5b8ab0fdcf21be68794c2693210e5ac1ccfd28f08";
 const PRESET_IMAGE_API_KEY = "sk-1d93294f4139baacf11806015bc92a5062f861331c90b315fe148ca74dbb9935";
 
@@ -51,6 +65,7 @@ type PendingAuthAction =
   | { type: "research" }
   | { type: "multi-view"; result: GenerationResult }
   | { type: "scene"; result: GenerationResult }
+  | { type: "local-edit"; result: GenerationResult; maskImageBase64: string; instruction: string }
   | null;
 type ResearchMessage = {
   id: string;
@@ -99,15 +114,21 @@ export default function Home() {
   const [quality, setQuality] = usePersistedState(storageKeys.quality, "high");
   const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
   const [referenceImage, setReferenceImage] = useState<UploadedImage | null>(null);
-  const [referenceWeight, setReferenceWeight] = usePersistedNumber(storageKeys.referenceWeight, 50);
+  const [innovationLevel, setInnovationLevel] = usePersistedNumber(storageKeys.innovationLevel, 50);
   const [authDraft, setAuthDraft] = useState("");
   const [authModalValue, setAuthModalValue] = useState("");
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction>(null);
   const [status, setStatus] = useState<GenerationStatus>("idle");
   const [generationBatches, setGenerationBatches] = useState<GenerationBatch[]>([]);
+  const generationBatchesRef = useRef<GenerationBatch[]>([]);
+  const designDescriptionTasksRef = useRef<Map<string, Promise<string>>>(new Map());
+  const [designDescriptionLoadingIds, setDesignDescriptionLoadingIds] = useState<string[]>([]);
+  const [localHistoryStats, setLocalHistoryStats] = useState<LocalGalleryStats | null>(null);
+  const [isLocalHistoryReady, setIsLocalHistoryReady] = useState(false);
   const [activeGenerationBatchId, setActiveGenerationBatchId] = useState<string | null>(null);
   const [pendingGenerationCount, setPendingGenerationCount] = useState(0);
+  const [mobileDesignSettingsOpen, setMobileDesignSettingsOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [researchInput, setResearchInput] = useState("");
   const [researchFiles, setResearchFiles] = useState<ResearchFile[]>([]);
@@ -160,12 +181,124 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreLocalHistory() {
+      try {
+        const batches = await loadLocalGenerationBatches();
+        if (cancelled) return;
+        generationBatchesRef.current = batches;
+        setGenerationBatches(batches);
+        setActiveGenerationBatchId(batches.at(-1)?.id || null);
+        setLocalHistoryStats(await getLocalGalleryStats());
+      } catch (error) {
+        if (cancelled) return;
+        const toast = {
+          id: makeId("toast"),
+          type: "error" as const,
+          message: error instanceof Error ? error.message : "本地作品恢复失败。"
+        };
+        setToasts((current) => [...current, toast]);
+        window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== toast.id)), 4200);
+      } finally {
+        if (!cancelled) setIsLocalHistoryReady(true);
+      }
+    }
+
+    void restoreLocalHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function pushToast(type: ToastMessage["type"], message: string) {
     const toast = { id: makeId("toast"), type, message };
     setToasts((current) => [...current, toast]);
     window.setTimeout(() => {
       setToasts((current) => current.filter((item) => item.id !== toast.id));
     }, 4200);
+  }
+
+  async function refreshHistoryStats() {
+    try {
+      setLocalHistoryStats(await getLocalGalleryStats());
+    } catch {
+      setLocalHistoryStats(null);
+    }
+  }
+
+  async function persistGeneratedBatch(batch: GenerationBatch) {
+    try {
+      await saveLocalGenerationBatch(batch);
+      await requestPersistentLocalStorage();
+      await refreshHistoryStats();
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "QuotaExceededError"
+        ? "浏览器本地空间不足，这张图片未能自动保存。请导出并清理部分历史作品。"
+        : error instanceof Error ? error.message : "图片已生成，但本地保存失败。";
+      pushToast("error", message);
+    }
+  }
+
+  async function exportLocalProject() {
+    if (!generationBatchesRef.current.length) return pushToast("info", "当前没有可导出的本地作品。");
+    try {
+      await exportPerdesignProject(generationBatchesRef.current);
+      pushToast("success", "项目备份已开始下载。");
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "项目导出失败。");
+    }
+  }
+
+  async function importLocalProject(file: File) {
+    try {
+      const importedBatches = await importPerdesignProject(file);
+      const current = generationBatchesRef.current;
+      let sequence = current.reduce((sum, batch) => sum + batch.results.length, 0);
+      const normalizedImports = importedBatches.map((batch) => ({
+        id: makeId(`imported-${batch.id || "batch"}`),
+        metadata: batch.metadata,
+        results: batch.results.map((result) => {
+          sequence += 1;
+          return {
+            ...result,
+            id: makeId(`imported-${result.id || "result"}`),
+            title: `Concept ${String(sequence).padStart(2, "0")}`
+          };
+        })
+      }));
+      const nextBatches = [...current, ...normalizedImports];
+      generationBatchesRef.current = nextBatches;
+      setGenerationBatches(nextBatches);
+      setActiveGenerationBatchId(normalizedImports.at(-1)?.id || current.at(-1)?.id || null);
+      await replaceLocalGenerationBatches(nextBatches);
+      await requestPersistentLocalStorage();
+      await refreshHistoryStats();
+      pushToast("success", `已导入 ${normalizedImports.reduce((sum, batch) => sum + batch.results.filter((result) => result.imageBase64).length, 0)} 张图片。`);
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "项目导入失败。");
+    }
+  }
+
+  async function clearLocalHistory() {
+    if (!generationBatchesRef.current.length) return;
+    if (!window.confirm("确定清空当前设备上的全部历史作品吗？建议先导出项目备份。")) return;
+    try {
+      await clearLocalGenerationBatches();
+      generationBatchesRef.current = [];
+      setGenerationBatches([]);
+      setActiveGenerationBatchId(null);
+      await refreshHistoryStats();
+      pushToast("success", "本地历史作品已清空。");
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "本地历史清空失败。");
+    }
+  }
+
+  function changeSection(section: WorkspaceSection) {
+    setMobileDesignSettingsOpen(false);
+    setActiveSection(section);
   }
 
   function getResolvedConfig(forceAuthorized = false) {
@@ -205,6 +338,9 @@ export default function Home() {
         break;
       case "scene":
         void generateSceneCore(action.result, forceAuthorized);
+        break;
+      case "local-edit":
+        void generateLocalEditCore(action.result, action.maskImageBase64, action.instruction, forceAuthorized);
         break;
       default:
         break;
@@ -292,6 +428,7 @@ export default function Home() {
   }
 
   async function generateCore(forceAuthorized = false) {
+    if (!isLocalHistoryReady) return pushToast("info", "正在恢复本地作品，请稍候再生成。");
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
@@ -300,21 +437,24 @@ export default function Home() {
     }
 
     await runGeneration({
-      imageBase64: uploadedImage?.dataUrl,
-      referenceImageBase64: referenceImage?.dataUrl,
-      referenceWeight: referenceImage ? referenceWeight : 0,
+      productImage: uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
+      referenceImage: referenceImage ? { name: referenceImage.name, dataUrl: referenceImage.dataUrl } : undefined,
+      innovationLevel,
       requirement,
       count
     }, forceAuthorized);
   }
 
   async function runGeneration(params: {
-    imageBase64?: string;
-    referenceImageBase64?: string;
-    referenceWeight: number;
+    productImage?: GenerationSourceImage;
+    referenceImage?: GenerationSourceImage;
+    innovationLevel: number;
     requirement: string;
     count: number;
+    generationType?: GenerationType;
+    metadataDescription?: string;
     sizeOverride?: string;
+    maskImageBase64?: string;
   }, forceAuthorized = false) {
     const config = getResolvedConfig(forceAuthorized);
     const batchId = makeId("generation-batch");
@@ -332,9 +472,10 @@ export default function Home() {
           chatApiBaseUrl: config.chatApiBaseUrl,
           brainModel: BRAIN_MODEL,
           imageModel,
-          imageBase64: params.imageBase64,
-          referenceImageBase64: params.referenceImageBase64,
-          referenceWeight: params.referenceWeight,
+          imageBase64: params.productImage?.dataUrl,
+          maskImageBase64: params.maskImageBase64,
+          referenceImageBase64: params.referenceImage?.dataUrl,
+          innovationLevel: params.innovationLevel,
           requirement: params.requirement,
           count: params.count,
           size: params.sizeOverride || size,
@@ -346,19 +487,31 @@ export default function Home() {
       if (!response.ok || !data.results) throw new Error(data.error || "生成失败，请稍后重试。");
       const nextResults = data.results;
 
-      setGenerationBatches((current) => {
-        const existingCount = current.reduce((sum, batch) => sum + batch.results.length, 0);
-        const numberedResults = nextResults.map((result, index) => {
-          const sequence = existingCount + index + 1;
-          const label = `Concept ${String(sequence).padStart(2, "0")}`;
-          return {
-            ...result,
-            title: label
-          };
-        });
-
-        return [...current, { id: batchId, results: numberedResults }];
+      const currentBatches = generationBatchesRef.current;
+      const existingCount = currentBatches.reduce((sum, batch) => sum + batch.results.length, 0);
+      const numberedResults = nextResults.map((result, index) => {
+        const sequence = existingCount + index + 1;
+        return {
+          ...result,
+          title: `Concept ${String(sequence).padStart(2, "0")}`,
+          prompt: result.prompt?.trim() || params.requirement
+        };
       });
+      const completedBatch: GenerationBatch = {
+        id: batchId,
+        results: numberedResults,
+        metadata: {
+          description: params.metadataDescription ?? params.requirement,
+          innovationLevel: params.innovationLevel,
+          generationType: params.generationType || "design",
+          productImage: params.productImage,
+          referenceImage: params.referenceImage
+        }
+      };
+      const nextBatches = [...currentBatches, completedBatch];
+      generationBatchesRef.current = nextBatches;
+      setGenerationBatches(nextBatches);
+      void persistGeneratedBatch(completedBatch);
       setPendingGenerationCount(0);
       setStatus("success");
       const failed = nextResults.filter((result) => result.error).length;
@@ -383,12 +536,13 @@ export default function Home() {
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于多视图生成。");
 
     await runGeneration({
-      imageBase64: result.imageBase64,
-      referenceImageBase64: undefined,
-      referenceWeight: 0,
+      productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
+      referenceImage: undefined,
+      innovationLevel: 0,
       requirement:
         "生成这个产品的多视角图片，画面最右侧是产品的斜侧透视图，左侧包含产品正视图、左视图、后视图、顶视图。",
       count: 1,
+      generationType: "multi-view",
       sizeOverride: "1536x1024"
     }, forceAuthorized);
   }
@@ -405,12 +559,109 @@ export default function Home() {
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于场景图生成。");
 
     await runGeneration({
-      imageBase64: result.imageBase64,
-      referenceImageBase64: undefined,
-      referenceWeight: 0,
-      requirement: "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图",
-      count: 1
+      productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
+      referenceImage: undefined,
+      innovationLevel: 0,
+      requirement: SCENE_GENERATION_PROMPT,
+      count: 1,
+      generationType: "scene"
     }, forceAuthorized);
+  }
+
+  async function generateLocalEdit(result: GenerationResult, maskImageBase64: string, instruction: string) {
+    if (!ensureAuthorized({ type: "local-edit", result, maskImageBase64, instruction })) return;
+    await generateLocalEditCore(result, maskImageBase64, instruction);
+  }
+
+  async function generateLocalEditCore(
+    result: GenerationResult,
+    maskImageBase64: string,
+    instruction: string,
+    forceAuthorized = false
+  ) {
+    const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
+    if (!unlocked) return;
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    if (!result.imageBase64) return pushToast("error", "当前图片不可用于局部修改。");
+    if (!maskImageBase64 || !instruction.trim()) return pushToast("error", "请先涂抹需要修改的区域，并输入修改要求。");
+
+    const sourceSize = await getImageSizeOption(result.imageBase64, size);
+    await runGeneration({
+      productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
+      maskImageBase64,
+      referenceImage: undefined,
+      innovationLevel: 0,
+      requirement: [
+        "请仅修改透明蒙版标记的涂抹区域。严格保持蒙版外的全部内容不变，包括产品结构、轮廓、构图、视角、比例、背景、光影、材质和细节。不要重绘、移动或改变任何未涂抹区域。",
+        `用户对涂抹区域的修改要求：${instruction.trim()}`
+      ].join("\n"),
+      count: 1,
+      generationType: "local-edit",
+      metadataDescription: instruction.trim(),
+      sizeOverride: sourceSize
+    }, forceAuthorized);
+  }
+
+  function generateDesignDescription(result: GenerationResult) {
+    const existingTask = designDescriptionTasksRef.current.get(result.id);
+    if (existingTask) return existingTask;
+    if (!ensureAuthorized()) return Promise.reject(new Error("请先完成认证，再生成设计说明。"));
+
+    const task = generateDesignDescriptionCore(result).finally(() => {
+      if (designDescriptionTasksRef.current.get(result.id) !== task) return;
+      designDescriptionTasksRef.current.delete(result.id);
+      setDesignDescriptionLoadingIds((current) => current.filter((id) => id !== result.id));
+    });
+    designDescriptionTasksRef.current.set(result.id, task);
+    setDesignDescriptionLoadingIds((current) => current.includes(result.id) ? current : [...current, result.id]);
+    return task;
+  }
+
+  async function generateDesignDescriptionCore(result: GenerationResult) {
+    const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
+    if (!unlocked || !resolvedChatApiKey || !resolvedChatApiBaseUrl) {
+      throw new Error("当前认证信息不可用，请重新输入认证码。");
+    }
+    if (!result.imageBase64) throw new Error("当前图片无法用于生成设计说明。");
+
+    try {
+      const response = await fetch("/api/design-description", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: resolvedChatApiKey,
+          baseUrl: resolvedChatApiBaseUrl,
+          model: BRAIN_MODEL,
+          imageBase64: result.imageBase64
+        })
+      });
+      const data = (await response.json()) as { description?: string; error?: string };
+      if (!response.ok || !data.description?.trim()) {
+        throw new Error(data.error || "设计说明生成失败，请稍后重试。");
+      }
+
+      const description = data.description.trim();
+      let updatedBatch: GenerationBatch | undefined;
+      const nextBatches = generationBatchesRef.current.map((batch) => {
+        if (!batch.results.some((item) => item.id === result.id)) return batch;
+        updatedBatch = {
+          ...batch,
+          results: batch.results.map((item) =>
+            item.id === result.id ? { ...item, designDescription: description } : item
+          )
+        };
+        return updatedBatch;
+      });
+      generationBatchesRef.current = nextBatches;
+      setGenerationBatches(nextBatches);
+      if (updatedBatch) await persistGeneratedBatch(updatedBatch);
+      pushToast("success", "设计说明已生成并保存。");
+      return description;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "设计说明生成失败，请稍后重试。";
+      pushToast("error", message);
+      throw error instanceof Error ? error : new Error(message);
+    }
   }
 
   async function sendResearchMessage() {
@@ -540,17 +791,33 @@ export default function Home() {
       <main className="app-shell">
         <div className="workspace-layout">
           <aside className="workspace-sidebar">
-            <WorkspaceNav activeSection={activeSection as WorkspaceSection} onChange={(section) => setActiveSection(section)} />
+            <WorkspaceNav activeSection={activeSection as WorkspaceSection} onChange={changeSection} />
 
             {activeSection === "design" ? (
-              <div className="workspace-sidebar-detail">
+              <>
+                <button
+                  type="button"
+                  className={`mobile-settings-backdrop ${mobileDesignSettingsOpen ? "open" : ""}`}
+                  onClick={() => setMobileDesignSettingsOpen(false)}
+                  aria-label="关闭设计设置"
+                />
+                <div className={`workspace-sidebar-detail ${mobileDesignSettingsOpen ? "mobile-open" : ""}`}>
+                  <div className="mobile-settings-header">
+                    <div>
+                      <strong>设计设置</strong>
+                      <span>产品图、参考图与生成参数</span>
+                    </div>
+                    <button type="button" onClick={() => setMobileDesignSettingsOpen(false)} aria-label="关闭设计设置">
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
                 <ControlPanel
                   uploadedImage={uploadedImage}
                   setUploadedImage={setUploadedImage}
                   referenceImage={referenceImage}
                   setReferenceImage={setReferenceImage}
-                  referenceWeight={referenceWeight}
-                  setReferenceWeight={setReferenceWeight}
+                  innovationLevel={innovationLevel}
+                  setInnovationLevel={setInnovationLevel}
                   requirement={requirement}
                   setRequirement={setRequirement}
                   count={count}
@@ -563,10 +830,14 @@ export default function Home() {
                   hasChatConfig={hasChatConfig}
                   canGenerate={canGenerate}
                   onOptimize={optimizePrompt}
-                  onGenerate={generate}
+                  onGenerate={() => {
+                    void generate();
+                    setMobileDesignSettingsOpen(false);
+                  }}
                   onError={(message) => pushToast("error", message)}
                 />
-              </div>
+                </div>
+              </>
             ) : null}
           </aside>
 
@@ -580,6 +851,16 @@ export default function Home() {
                 isGeneratingVariant={status === "generating"}
                 onGenerateMultiView={generateMultiView}
                 onGenerateScene={generateScene}
+                onGenerateDesignDescription={generateDesignDescription}
+                designDescriptionLoadingIds={designDescriptionLoadingIds}
+                onLocalEdit={generateLocalEdit}
+                onOpenSettings={() => setMobileDesignSettingsOpen(true)}
+                historyStats={localHistoryStats}
+                isHistoryReady={isLocalHistoryReady}
+                onRefreshHistoryStats={refreshHistoryStats}
+                onExportProject={exportLocalProject}
+                onImportProject={importLocalProject}
+                onClearHistory={clearLocalHistory}
                 onError={(message) => pushToast("error", message)}
                 onSuccess={(message) => pushToast("success", message)}
               />
@@ -965,6 +1246,19 @@ function usePersistedNumber(key: string, defaultValue: number) {
   }, [hydrated, key, value]);
 
   return [value, setValue] as const;
+}
+
+function getImageSizeOption(dataUrl: string, fallback: string) {
+  return new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      if (image.naturalWidth > image.naturalHeight) return resolve("1536x1024");
+      if (image.naturalHeight > image.naturalWidth) return resolve("1024x1536");
+      resolve("1024x1024");
+    };
+    image.onerror = () => resolve(fallback);
+    image.src = dataUrl;
+  });
 }
 
 function normalizeAuthCode(value: string) {

@@ -2,8 +2,8 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Trash2, UploadCloud } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ImagePlus, Trash2, UploadCloud, X } from "lucide-react";
 import type { UploadedImage } from "@/lib/types";
 import { formatBytes } from "@/lib/image";
 
@@ -32,8 +32,9 @@ export function ImageUploader({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [pasteTargetActive, setPasteTargetActive] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
-  async function handleFile(file?: File) {
+  const handleFile = useCallback(async (file?: File) => {
     if (!file) return;
     if (!ACCEPTED.includes(file.type)) {
       onError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
@@ -52,7 +53,7 @@ export function ImageUploader({
     });
 
     onChange({ name: file.name, size: file.size, type: file.type, dataUrl });
-  }
+  }, [onChange, onError]);
 
   useEffect(() => {
     if (!pasteTargetActive) return;
@@ -69,7 +70,30 @@ export function ImageUploader({
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [pasteTargetActive]);
+  }, [handleFile, pasteTargetActive]);
+
+  const interactionProps = {
+    onMouseEnter: () => setPasteTargetActive(true),
+    onMouseLeave: () => setPasteTargetActive(false),
+    onFocus: () => setPasteTargetActive(true),
+    onBlur: () => setPasteTargetActive(false),
+    onDragOver: (event: React.DragEvent) => {
+      event.preventDefault();
+      setDragging(true);
+    },
+    onDragLeave: () => setDragging(false),
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault();
+      setDragging(false);
+      void handleFile(event.dataTransfer.files[0]);
+    }
+  };
+
+  const uploadSurfaceClass = `w-full overflow-hidden rounded-[18px] border p-4 text-left transition ${
+    dragging || pasteTargetActive
+      ? "border-white/[0.08] bg-white/[0.04]"
+      : "border-white/10 bg-[#18181a] hover:border-white/20 hover:bg-[#1d1d20]"
+  }`;
 
   return (
     <div className="space-y-3">
@@ -87,40 +111,33 @@ export function ImageUploader({
         ) : null}
       </div>
 
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        onMouseEnter={() => setPasteTargetActive(true)}
-        onMouseLeave={() => setPasteTargetActive(false)}
-        onFocus={() => setPasteTargetActive(true)}
-        onBlur={() => setPasteTargetActive(false)}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          handleFile(event.dataTransfer.files[0]);
-        }}
-        className={`w-full overflow-hidden rounded-[18px] border p-4 text-left transition ${
-          dragging
-            ? "border-white/[0.08] bg-white/[0.04]"
-            : pasteTargetActive
-              ? "border-white/[0.08] bg-white/[0.04]"
-            : "border-white/10 bg-[#18181a] hover:border-white/20 hover:bg-[#1d1d20]"
-        }`}
-      >
-        {value ? (
+      {value ? (
+        <div className={uploadSurfaceClass} {...interactionProps}>
           <div className="flex gap-3">
-            <img src={value.dataUrl} alt={imageAlt} className="h-20 w-20 shrink-0 rounded-xl object-cover" />
-            <div className="min-w-0 self-center">
+            <button
+              type="button"
+              className="group relative h-20 w-20 shrink-0 overflow-hidden rounded-xl outline-none ring-violet-400/60 focus-visible:ring-2"
+              onClick={() => setPreviewOpen(true)}
+              aria-label={`预览${title}`}
+              title={`预览${title}`}
+            >
+              <img src={value.dataUrl} alt={imageAlt} className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.04]" />
+              <span className="absolute inset-0 bg-black/0 transition group-hover:bg-black/10" />
+            </button>
+            <button
+              type="button"
+              className="min-w-0 flex-1 self-stretch rounded-xl px-3 text-left outline-none transition hover:bg-white/[0.045] focus-visible:bg-white/[0.045] focus-visible:ring-2 focus-visible:ring-violet-400/50"
+              onClick={() => inputRef.current?.click()}
+              aria-label={`重新上传${title}：${value.name}`}
+              title={`重新上传${title}`}
+            >
               <p className="truncate text-sm font-medium text-white">{value.name}</p>
               <p className="mt-1 text-xs text-zinc-500">{formatBytes(value.size)}</p>
-            </div>
+            </button>
           </div>
-        ) : (
+        </div>
+      ) : (
+        <button type="button" onClick={() => inputRef.current?.click()} className={uploadSurfaceClass} {...interactionProps}>
           <div className="flex gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-white/10 bg-[#222226]">
               {title.includes("参考") ? <ImagePlus className="h-5 w-5 text-violet-200" /> : <UploadCloud className="h-5 w-5 text-violet-200" />}
@@ -130,16 +147,40 @@ export function ImageUploader({
               <p className="mt-1 text-xs leading-5 text-zinc-500">{helperText}</p>
             </div>
           </div>
-        )}
-      </button>
+        </button>
+      )}
 
       <input
         ref={inputRef}
         className="hidden"
         type="file"
         accept="image/png,image/jpeg,image/webp"
-        onChange={(event) => handleFile(event.target.files?.[0])}
+        onChange={(event) => {
+          void handleFile(event.target.files?.[0]);
+          event.target.value = "";
+        }}
       />
+
+      {previewOpen && value ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-4 backdrop-blur-md" onClick={() => setPreviewOpen(false)}>
+          <div className="relative inline-flex max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)]" onClick={(event) => event.stopPropagation()}>
+            <img
+              src={value.dataUrl}
+              alt={`${title}大图预览`}
+              className="block h-auto max-h-[calc(100dvh-2rem)] w-auto max-w-[calc(100vw-2rem)] rounded-[18px] border border-white/10 object-contain"
+            />
+            <button
+              type="button"
+              className="btn-secondary absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-xl bg-black/45"
+              onClick={() => setPreviewOpen(false)}
+              aria-label="关闭图片预览"
+              title="关闭"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -15,8 +15,9 @@ const requestSchema = z.object({
   brainModel: z.string().min(1).optional().default(BRAIN_MODEL),
   imageModel: z.string().min(1, "请选择生图模型。"),
   imageBase64: z.string().startsWith("data:image/").optional(),
+  maskImageBase64: z.string().startsWith("data:image/").optional(),
   referenceImageBase64: z.string().startsWith("data:image/").optional(),
-  referenceWeight: z.number().int().min(0).max(100).optional().default(0),
+  innovationLevel: z.number().int().min(0).max(100).optional().default(50),
   requirement: z.string().optional().default(""),
   count: z.number().int().min(1).max(10),
   size: z.string().min(1),
@@ -81,9 +82,10 @@ async function generateConceptImage({
       apiKey: payload.imageApiKey,
       imageModel: payload.imageModel,
       inputImages: [payload.imageBase64, payload.referenceImageBase64].filter((item): item is string => Boolean(item)),
+      maskImage: payload.maskImageBase64,
       prompt: conceptPrompt,
       hasProductImage: Boolean(payload.imageBase64),
-      referenceWeight: payload.referenceWeight,
+      innovationLevel: payload.innovationLevel,
       hasReference: hasReferenceImage,
       size: payload.size,
       quality: payload.quality
@@ -95,8 +97,7 @@ async function generateConceptImage({
     apiKey: payload.imageApiKey,
     imageModel: payload.imageModel,
     prompt: conceptPrompt,
-    referenceWeight: payload.referenceWeight,
-    hasReference: hasReferenceImage,
+    innovationLevel: payload.innovationLevel,
     size: payload.size,
     quality: payload.quality
   });
@@ -104,7 +105,7 @@ async function generateConceptImage({
 
 function buildDirectConcepts(requirement: string, count: number, hasProductImage: boolean) {
   const basePrompt = requirement.trim() || (hasProductImage
-    ? "Preserve the original product structure, proportions and camera angle, create a refined industrial design variation with premium CMF, realistic rendering, clean background."
+    ? "Create a refined, manufacturable industrial design variation with premium CMF, realistic rendering, and a clean background."
     : "Create a premium industrial design product concept, realistic rendering, clean background, strong CMF detailing.");
 
   return Array.from({ length: count }, (_, index) => ({

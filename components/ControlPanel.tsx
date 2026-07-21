@@ -12,8 +12,8 @@ type ControlPanelProps = {
   setUploadedImage: (image: UploadedImage | null) => void;
   referenceImage: UploadedImage | null;
   setReferenceImage: (image: UploadedImage | null) => void;
-  referenceWeight: number;
-  setReferenceWeight: (value: number) => void;
+  innovationLevel: number;
+  setInnovationLevel: (value: number) => void;
   requirement: string;
   setRequirement: (value: string) => void;
   count: number;
@@ -47,35 +47,38 @@ export function ControlPanel(props: ControlPanelProps) {
           imageAlt="上传的产品图"
         />
 
-        <div className="liquid-card rounded-[18px] p-3">
-          <ImageUploader
-            value={props.referenceImage}
-            onChange={props.setReferenceImage}
-            onError={props.onError}
-            title="参考图"
-            emptyTitle="拖入参考图，提取风格语言"
-            helperText="选填。用于参考材质、配色、细节和设计语言"
-            imageAlt="上传的参考图"
-          />
+        <ImageUploader
+          value={props.referenceImage}
+          onChange={props.setReferenceImage}
+          onError={props.onError}
+          title="参考图"
+          emptyTitle="拖入参考图，提取风格语言"
+          helperText="选填。仅参考材质、配色、细节和设计语言，不复制产品造型"
+          imageAlt="上传的参考图"
+        />
 
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-200">参考权重</span>
-              <span className="text-sm text-white">{props.referenceWeight}%</span>
+        <div className="liquid-card space-y-3 rounded-[18px] p-4">
+          <div>
+            <span className="text-sm font-medium text-slate-200">创新度</span>
+            <div className="mt-1 flex items-baseline justify-between gap-3">
+              <p className="text-xs text-slate-500">控制产品结构的延续与重构幅度</p>
+              <span className="shrink-0 text-sm text-white">{props.innovationLevel}%</span>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={props.referenceWeight}
-              onChange={(event) => props.setReferenceWeight(Number(event.target.value))}
-              disabled={!props.referenceImage}
-              className="w-full accent-violet-400 disabled:opacity-35"
-            />
-            <p className="text-xs leading-5 text-slate-500">
-              {props.referenceImage ? "权重越高，越强调参考图的 CMF、细节和风格气质。" : "上传参考图后可调整影响强度。"}
-            </p>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={props.innovationLevel}
+            onChange={(event) => props.setInnovationLevel(Number(event.target.value))}
+            disabled={busy}
+            className="w-full accent-violet-400 disabled:cursor-not-allowed disabled:opacity-45"
+            aria-label="创新度"
+          />
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <span>结构延续</span>
+            <span>自由创新</span>
           </div>
         </div>
 
