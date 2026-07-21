@@ -46,22 +46,42 @@ export function getDataUrlMime(dataUrl: string) {
   return dataUrl.match(/^data:(.*?);base64,/)?.[1] || "image/png";
 }
 
-export function prepareImageForVision(dataUrl: string, maxDimension = 1600, quality = 0.82) {
+export function prepareImageForVision(dataUrl: string, maxDimension = 1280, quality = 0.76) {
   return new Promise<string>((resolve, reject) => {
     const image = new Image();
     image.onload = () => {
       const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
       const width = Math.max(1, Math.round(image.naturalWidth * scale));
       const height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const canvas = document.createElement("canvas");
+      let canvas = document.createElement("canvas");
       canvas.width = width;
       canvas.height = height;
-      const context = canvas.getContext("2d");
+      let context = canvas.getContext("2d");
       if (!context) return reject(new Error("当前浏览器无法处理设计说明图片。"));
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, width, height);
       context.drawImage(image, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", quality));
+
+      let encoded = canvas.toDataURL("image/jpeg", quality);
+      let currentQuality = quality;
+      const maximumDataUrlLength = 900_000;
+      for (let attempt = 0; encoded.length > maximumDataUrlLength && attempt < 5; attempt += 1) {
+        currentQuality = Math.max(0.46, currentQuality - 0.08);
+        if (attempt >= 2 && Math.max(canvas.width, canvas.height) > 720) {
+          const smallerCanvas = document.createElement("canvas");
+          smallerCanvas.width = Math.max(1, Math.round(canvas.width * 0.8));
+          smallerCanvas.height = Math.max(1, Math.round(canvas.height * 0.8));
+          const smallerContext = smallerCanvas.getContext("2d");
+          if (!smallerContext) break;
+          smallerContext.fillStyle = "#ffffff";
+          smallerContext.fillRect(0, 0, smallerCanvas.width, smallerCanvas.height);
+          smallerContext.drawImage(canvas, 0, 0, smallerCanvas.width, smallerCanvas.height);
+          canvas = smallerCanvas;
+          context = smallerContext;
+        }
+        encoded = canvas.toDataURL("image/jpeg", currentQuality);
+      }
+      resolve(encoded);
     };
     image.onerror = () => reject(new Error("当前图片无法用于生成设计说明。"));
     image.src = dataUrl;

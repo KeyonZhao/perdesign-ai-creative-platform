@@ -660,9 +660,12 @@ export default function Home() {
       pushToast("success", "设计说明已生成并保存。");
       return description;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "设计说明生成失败，请稍后重试。";
+      const originalMessage = error instanceof Error ? error.message : "";
+      const message = /failed to fetch|networkerror|load failed/i.test(originalMessage)
+        ? "无法连接设计说明服务。若当前网址是 localhost，请重新启动本地服务；若是 Vercel 网址，请刷新页面后重试。"
+        : originalMessage || "设计说明生成失败，请稍后重试。";
       pushToast("error", message);
-      throw error instanceof Error ? error : new Error(message);
+      throw new Error(message);
     }
   }
 
