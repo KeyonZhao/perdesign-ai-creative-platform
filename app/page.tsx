@@ -896,6 +896,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
+        <span className="app-version" aria-label="当前版本 v1.0.0">v1.0.0</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}

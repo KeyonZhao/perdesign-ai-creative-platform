@@ -59,6 +59,20 @@ textarea {
   padding: 0;
 }
 
+.app-version {
+  position: fixed;
+  bottom: 5px;
+  left: 18px;
+  z-index: 45;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  user-select: none;
+}
+
 .workspace-layout {
   display: flex;
   height: 100%;
@@ -1584,6 +1598,12 @@ textarea {
   .app-shell {
     height: 100dvh;
     padding: 0;
+  }
+
+  .app-version {
+    right: 18px;
+    bottom: calc(83px + env(safe-area-inset-bottom));
+    left: auto;
   }
 
   .workspace-layout {
