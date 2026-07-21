@@ -25,6 +25,7 @@ import {
   type LocalGalleryStats
 } from "@/lib/local-gallery";
 import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
+import { prepareImageForVision } from "@/lib/image";
 import type {
   GenerationBatch,
   GenerationResult,
@@ -411,7 +412,7 @@ export default function Home() {
           userPrompt: requirement
         })
       });
-      const data = (await response.json()) as { optimizedPrompt?: string; error?: string };
+      const data = await readApiResponse<{ optimizedPrompt?: string; error?: string }>(response);
       if (!response.ok || !data.optimizedPrompt) throw new Error(data.error || "提示词优化失败。");
       setRequirement(data.optimizedPrompt);
       setStatus("idle");
@@ -483,7 +484,7 @@ export default function Home() {
         })
       });
 
-      const data = (await response.json()) as { results?: GenerationResult[]; error?: string };
+      const data = await readApiResponse<{ results?: GenerationResult[]; error?: string }>(response);
       if (!response.ok || !data.results) throw new Error(data.error || "生成失败，请稍后重试。");
       const nextResults = data.results;
 
@@ -625,6 +626,7 @@ export default function Home() {
     if (!result.imageBase64) throw new Error("当前图片无法用于生成设计说明。");
 
     try {
+      const imageForAnalysis = await prepareImageForVision(result.imageBase64);
       const response = await fetch("/api/design-description", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -632,10 +634,10 @@ export default function Home() {
           apiKey: resolvedChatApiKey,
           baseUrl: resolvedChatApiBaseUrl,
           model: BRAIN_MODEL,
-          imageBase64: result.imageBase64
+          imageBase64: imageForAnalysis
         })
       });
-      const data = (await response.json()) as { description?: string; error?: string };
+      const data = await readApiResponse<{ description?: string; error?: string }>(response);
       if (!response.ok || !data.description?.trim()) {
         throw new Error(data.error || "设计说明生成失败，请稍后重试。");
       }
@@ -705,7 +707,7 @@ export default function Home() {
         })
       });
 
-      const data = (await response.json()) as { answer?: string; sources?: string[]; error?: string };
+      const data = await readApiResponse<{ answer?: string; sources?: string[]; error?: string }>(response);
       if (!response.ok || !data.answer) throw new Error(data.error || "策划研究回复失败。");
       const answer = data.answer;
       const sources = data.sources || [];
@@ -1210,6 +1212,21 @@ function AuthCodeModal({
       </div>
     </div>
   );
+}
+
+async function readApiResponse<T>(response: Response): Promise<T> {
+  const responseText = await response.text();
+  try {
+    return JSON.parse(responseText) as T;
+  } catch {
+    if (response.status === 413 || /request entity too large|payload too large/i.test(responseText)) {
+      throw new Error("上传图片数据过大，服务器未能接收。平台已尝试压缩图片，请刷新后重试。");
+    }
+    if (!response.ok) {
+      throw new Error(`服务请求失败（${response.status}），请稍后重试。`);
+    }
+    throw new Error("服务返回格式异常，请稍后重试。");
+  }
 }
 
 function usePersistedState(key: string, defaultValue: string) {

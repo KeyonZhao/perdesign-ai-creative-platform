@@ -45,3 +45,25 @@ export function releaseImageFileDrag(objectUrl: string | null) {
 export function getDataUrlMime(dataUrl: string) {
   return dataUrl.match(/^data:(.*?);base64,/)?.[1] || "image/png";
 }
+
+export function prepareImageForVision(dataUrl: string, maxDimension = 1600, quality = 0.82) {
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) return reject(new Error("当前浏览器无法处理设计说明图片。"));
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    image.onerror = () => reject(new Error("当前图片无法用于生成设计说明。"));
+    image.src = dataUrl;
+  });
+}
