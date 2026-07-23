@@ -7,13 +7,23 @@ const requestSchema = z.object({
   apiKey: z.string().min(1, "请先填写对话 API Key。"),
   baseUrl: z.string().url("请填写有效的对话请求地址。"),
   model: z.string().min(1, "请选择大脑模型。"),
-  productName: z.string().trim().min(1, "请先填写产品名称。").max(100, "产品名称不能超过100个字符。"),
+  productName: z.string().trim().max(100, "产品名称不能超过100个字符。").optional().default(""),
   userPrompt: z.string().optional().default(""),
   productImageBase64: z.string().startsWith("data:image/").optional(),
   sketchImageBase64: z.string().startsWith("data:image/").optional(),
   referenceImageBase64: z.string().startsWith("data:image/").optional(),
   innovationLevel: z.number().int().min(0).max(100).optional().default(50)
-});
+}).refine(
+  (value) =>
+    Boolean(
+      value.productName ||
+      value.userPrompt.trim() ||
+      value.productImageBase64 ||
+      value.sketchImageBase64 ||
+      value.referenceImageBase64
+    ),
+  { message: "请填写文字描述，或上传可用于撰写提示词的图片。" }
+);
 
 export async function POST(request: Request) {
   try {

@@ -121,22 +121,27 @@ type ControlPanelProps = {
 
 export function ControlPanel(props: ControlPanelProps) {
   const busy = props.status === "generating" || props.status === "optimizing";
-  const canGenerate = Boolean(props.canGenerate && props.productName.trim() && !busy);
+  const canGenerate = Boolean(props.canGenerate && !busy);
+  const canOptimize = Boolean(
+    props.productName.trim() ||
+    props.requirement.trim() ||
+    props.uploadedImage ||
+    props.referenceImage
+  );
 
   return (
     <div className="design-panel flex h-full min-h-0 flex-col">
       <div className="sidebar-scroll min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
         <label className="block space-y-2">
           <span className="text-sm font-medium text-slate-200">
-            产品名称 <span className="text-violet-300" aria-hidden="true">*</span>
+            产品名称
           </span>
           <input
             className="field h-11 px-3 text-sm"
             value={props.productName}
             onChange={(event) => props.setProductName(event.target.value)}
-            placeholder="例如：桌面蓝牙音响"
+            placeholder="选填，例如：桌面蓝牙音响"
             maxLength={100}
-            required
             disabled={busy}
           />
         </label>
@@ -208,7 +213,7 @@ export function ControlPanel(props: ControlPanelProps) {
                 type="button"
                 className="btn-secondary flex h-8 items-center gap-2 rounded-md px-2.5 text-xs disabled:opacity-40"
                 onClick={props.onOptimize}
-                disabled={!props.hasChatConfig || !props.productName.trim() || busy}
+                disabled={!props.hasChatConfig || !canOptimize || busy}
               >
                 {props.status === "optimizing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                 AI撰写提示词

@@ -74,7 +74,7 @@ export async function callChatCompletion(params: {
 const PROMPT_OPTIMIZER_SYSTEM_PROMPT = `你是一名具备多模态理解能力的工业设计提示词架构师。你的任务不是机械扩写，也不是堆砌“高清、4K、科技感、高级感”等词，而是结合用户当前文字与上传图片，生成一段可直接提交给图像生成模型的中文产品设计提示词。
 
 始终遵守以下原则：
-1. 平台单独提供的“产品名称”定义最终要生成的产品主体，必须在最终提示词中明确体现；用户最新文字要求优先级最高。保留用户当前提示词中的全部明确要求，包括用户在上次优化后手动补充或修改的内容，不得擅自删除、反转或替换核心意图。
+1. 若用户提供“产品名称”，它定义最终要生成的产品主体，必须在最终提示词中明确体现；若未提供产品名称，则根据主体图片和用户文字可靠判断产品品类，不确定时使用中性产品表达，不得臆造。用户最新文字要求优先级最高。保留用户当前提示词中的全部明确要求，包括用户在上次优化后手动补充或修改的内容，不得擅自删除、反转或替换核心意图。
 2. 产品图或产品草图决定设计主体和需要保留的内容；设计参考图只提供适合迁移的造型、CMF、材质、工艺、细节或渲染语言。若只有参考图，则由用户文字决定目标品类；用户未指定品类且图片品类清晰时，可生成同品类的新设计，但不得直接复制完整外形；图片品类无法可靠判断时，使用中性的工业产品概念表达，不得虚构具体功能。
 3. 必须真实读取图片。只能描述可见的品类、轮廓、比例、体块、结构、部件、材质、颜色、工艺、视角和画面特征；无法确认的信息使用中性表达，不得虚构功能、接口、内部结构、品牌或使用方式。
 4. 先在内部判断任务属于：纯文字生成、草图效果图、现有产品优化、局部修改、整体重设计、参考语言迁移、材质/配色调整、场景图、渲染风格或视角调整。不要向用户展示判断和分析过程。
@@ -102,7 +102,9 @@ export async function optimizeUserPrompt(params: {
   const hasProduct = Boolean(params.productImageBase64);
   const hasSketch = Boolean(params.sketchImageBase64);
   const hasReference = Boolean(params.referenceImageBase64);
-  if (!productName) throw new Error("请先填写产品名称。");
+  if (!productName && !params.userPrompt.trim() && !hasProduct && !hasSketch && !hasReference) {
+    throw new Error("请填写文字描述，或上传可用于撰写提示词的图片。");
+  }
 
   const imageRoles: string[] = [];
   let imageIndex = 1;
@@ -122,8 +124,12 @@ export async function optimizeUserPrompt(params: {
     {
       type: "text",
       text: [
-        `产品名称：${productName}。这是最终要生成的产品主体，不得替换为其他产品品类。`,
-        `用户当前文字：${params.userPrompt.trim() || "用户尚未输入其他文字，请根据产品名称与当前图片关系生成完整、准确且可执行的提示词。"}`,
+        productName
+          ? `产品名称：${productName}。这是最终要生成的产品主体，不得替换为其他产品品类。`
+          : hasProduct || hasSketch
+            ? "用户未填写产品名称，请以主体图片中能够可靠识别的产品品类作为最终生成主体。"
+            : "用户未填写产品名称，请依据用户文字确定最终产品品类；无法可靠确定时使用中性工业产品表达。",
+        `用户当前文字：${params.userPrompt.trim() || "用户尚未输入其他文字，请根据当前图片关系生成完整、准确且可执行的提示词。"}`,
         imageRoles.length ? `平台已明确图片角色：${imageRoles.join("；")}。` : "当前没有上传图片，不得描述或引用不存在的图片。",
         `当前创新度：${Math.max(0, Math.min(100, params.innovationLevel ?? 50))}%。创新度仅决定造型变化幅度，用户明确的局部修改、保留要求和草图忠实度优先级更高。`,
         "请在内部完成任务类型、目标品类、主体/参考关系、保留/修改/禁止关系和可生产性分析，然后只输出一段可直接生图的中文提示词。"

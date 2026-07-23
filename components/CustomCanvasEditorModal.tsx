@@ -123,10 +123,6 @@ export function CustomCanvasEditorModal({
       onError("请先上传需要编辑的图片。");
       return null;
     }
-    if (!productName.trim()) {
-      onError("请先填写产品名称。");
-      return null;
-    }
     return {
       productName: productName.trim(),
       sourceImage,
@@ -303,13 +299,13 @@ export function CustomCanvasEditorModal({
             <div className="custom-canvas-settings-scroll">
               <label className="block space-y-2">
                 <span className="text-sm font-medium text-slate-200">
-                  产品名称 <span className="text-violet-300" aria-hidden="true">*</span>
+                  产品名称
                 </span>
                 <input
                   className="field h-11 px-3 text-sm"
                   value={productName}
                   onChange={(event) => setProductName(event.target.value)}
-                  placeholder="例如：智能骑行头盔"
+                  placeholder="选填，例如：智能骑行头盔"
                   maxLength={100}
                   disabled={busy}
                 />
@@ -372,7 +368,7 @@ export function CustomCanvasEditorModal({
                       type="button"
                       className="btn-secondary flex h-8 items-center gap-2 rounded-md px-2.5 text-xs disabled:opacity-40"
                       onClick={() => void optimizePrompt()}
-                      disabled={!hasChatConfig || !sourceImage || !productName.trim() || busy}
+                      disabled={!hasChatConfig || !sourceImage || busy}
                     >
                       {isOptimizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                       AI撰写提示词
@@ -415,7 +411,7 @@ export function CustomCanvasEditorModal({
                 type="button"
                 className="btn-primary flex h-12 w-full items-center justify-center gap-2 rounded-[14px] text-sm font-semibold"
                 onClick={startGeneration}
-                disabled={!sourceImage || !productName.trim() || busy}
+                disabled={!sourceImage || busy}
               >
                 {status === "generating" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {status === "generating" ? "正在重构..." : "开始智能重构"}

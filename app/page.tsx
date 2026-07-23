@@ -164,7 +164,12 @@ export default function Home() {
   ]);
   const isAuthorized = normalizeAuthCode(authCode) === AUTH_CODE;
   const hasChatConfig = isAuthorized;
-  const canGenerate = Boolean(productName.trim());
+  const canGenerate = Boolean(
+    productName.trim() ||
+    requirement.trim() ||
+    uploadedImage ||
+    referenceImage
+  );
 
   useEffect(() => {
     setAuthDraft(authCode);
@@ -559,7 +564,9 @@ export default function Home() {
     const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
     if (!unlocked) return openAuthModal();
     if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
-    if (!productName.trim()) return pushToast("error", "请先填写产品名称。");
+    if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImage) {
+      return pushToast("error", "请填写文字描述，或上传可用于撰写提示词的图片。");
+    }
 
     setStatus("optimizing");
     try {
@@ -648,7 +655,9 @@ export default function Home() {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
-    if (!productName.trim()) return pushToast("error", "请先填写产品名称。");
+    if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImage) {
+      return pushToast("error", "请填写文字描述，或上传可用于生成的图片。");
+    }
 
     await runGeneration({
       productName: productName.trim(),
@@ -678,8 +687,8 @@ export default function Home() {
       pushToast("error", "当前认证信息不可用，请重新输入认证码。");
       return;
     }
-    if (!request.productName.trim() || !request.sourceImage.dataUrl) {
-      pushToast("error", "请先填写产品名称并上传需要编辑的图片。");
+    if (!request.sourceImage.dataUrl) {
+      pushToast("error", "请先上传需要编辑的图片。");
       return;
     }
 
