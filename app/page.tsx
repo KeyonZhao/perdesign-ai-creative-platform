@@ -5,6 +5,7 @@ import {
   Bot,
   Check,
   Copy,
+  Grid3X3,
   Mic,
   MessageSquareText,
   Palette,
@@ -17,6 +18,7 @@ import {
 import { ControlPanel } from "@/components/ControlPanel";
 import { Gallery } from "@/components/Gallery";
 import { Toast } from "@/components/Toast";
+import { VentEditor } from "@/components/VentEditor";
 import {
   clearLocalGenerationBatches,
   getLocalGalleryStats,
@@ -71,8 +73,13 @@ const PRESET_CHAT_API_KEY = "server-managed";
 const PRESET_IMAGE_API_KEY = "server-managed";
 const MAX_IMAGE_GENERATION_CONCURRENCY = 20;
 
-type WorkspaceSection = "research" | "design" | "api";
-type ResearchFile = { name: string; size: number };
+type WorkspaceSection = "research" | "design" | "vent" | "api";
+type ResearchFile = {
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string;
+};
 type PendingAuthAction =
   | { type: "generate" }
   | { type: "research" }
@@ -1069,9 +1076,17 @@ export default function Home() {
 
     const files = researchFiles.length ? [...researchFiles] : undefined;
     const userContent = researchInput.trim() || "请基于我上传的资料继续展开研究。";
+    const conversationImages = files?.map((file) => ({
+      name: file.name,
+      dataUrl: file.dataUrl
+    }));
     const nextConversation = [
       ...researchMessages.map((message) => ({ role: message.role, content: message.content })),
-      { role: "user" as const, content: userContent }
+      {
+        role: "user" as const,
+        content: userContent,
+        images: conversationImages
+      }
     ];
 
     setResearchMessages((current) => [...current, { id: makeId("research-user"), role: "user", content: userContent, files }]);
@@ -1121,10 +1136,41 @@ export default function Home() {
     }
   }
 
-  function addResearchFiles(files: FileList | null) {
+  async function addResearchFiles(files: FileList | null) {
     if (!files?.length) return;
-    const next = Array.from(files).map((file) => ({ name: file.name, size: file.size }));
-    setResearchFiles((current) => [...current, ...next]);
+    const availableSlots = Math.max(0, 4 - researchFiles.length);
+    if (!availableSlots) {
+      pushToast("error", "每次最多上传 4 张图片。");
+      return;
+    }
+
+    const selectedFiles = Array.from(files);
+    const imageFiles = selectedFiles.filter((file) => file.type.startsWith("image/")).slice(0, availableSlots);
+    if (imageFiles.length !== selectedFiles.length) {
+      pushToast("error", "策划研究目前仅支持上传图片，每次最多 4 张。");
+    }
+    if (!imageFiles.length) return;
+
+    try {
+      const next = await Promise.all(
+        imageFiles.map(async (file) => {
+          if (file.size > 20 * 1024 * 1024) {
+            throw new Error(`${file.name} 超过 20MB，请压缩后重新上传。`);
+          }
+          const originalDataUrl = await readFileAsDataUrl(file);
+          const dataUrl = await prepareImageForVision(originalDataUrl, 1600, 0.82);
+          return {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            dataUrl
+          } satisfies ResearchFile;
+        })
+      );
+      setResearchFiles((current) => [...current, ...next].slice(0, 4));
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "图片读取失败，请更换图片后重试。");
+    }
   }
 
   function toggleResearchVoiceInput() {
@@ -1178,9 +1224,11 @@ export default function Home() {
         <div className="workspace-layout">
           <aside className="workspace-sidebar">
             <WorkspaceNav activeSection={activeSection as WorkspaceSection} onChange={changeSection} />
+          </aside>
 
-            {activeSection === "design" ? (
-              <>
+          <div className="workspace-main">
+            <section className={activeSection === "design" ? "section-surface design-editor" : "hidden"}>
+              <div className="design-workspace">
                 <button
                   type="button"
                   className={`mobile-settings-backdrop ${mobileDesignSettingsOpen ? "open" : ""}`}
@@ -1197,69 +1245,66 @@ export default function Home() {
                       <X className="h-5 w-5" />
                     </button>
                   </div>
-                <ControlPanel
-                  productName={productName}
-                  setProductName={setProductName}
-                  productInputMode={productInputMode}
-                  setProductInputMode={setProductInputMode}
-                  uploadedImage={uploadedImage}
-                  setUploadedImage={setUploadedImage}
-                  referenceImage={referenceImage}
-                  setReferenceImage={setReferenceImage}
-                  innovationLevel={innovationLevel}
-                  setInnovationLevel={setInnovationLevel}
-                  requirement={requirement}
-                  setRequirement={setRequirement}
-                  count={count}
-                  setCount={setCount}
-                  size={size}
-                  setSize={setSize}
-                  status={status}
-                  hasChatConfig={hasChatConfig}
-                  canGenerate={canGenerate}
-                  onOptimize={optimizePrompt}
-                  onRestorePrompt={restorePromptBeforeOptimization}
-                  canRestorePrompt={promptBeforeOptimization !== null}
-                  onGenerate={() => {
-                    void generate();
-                    setMobileDesignSettingsOpen(false);
-                  }}
-                  onError={(message) => pushToast("error", message)}
-                />
+                  <ControlPanel
+                    productName={productName}
+                    setProductName={setProductName}
+                    productInputMode={productInputMode}
+                    setProductInputMode={setProductInputMode}
+                    uploadedImage={uploadedImage}
+                    setUploadedImage={setUploadedImage}
+                    referenceImage={referenceImage}
+                    setReferenceImage={setReferenceImage}
+                    innovationLevel={innovationLevel}
+                    setInnovationLevel={setInnovationLevel}
+                    requirement={requirement}
+                    setRequirement={setRequirement}
+                    count={count}
+                    setCount={setCount}
+                    size={size}
+                    setSize={setSize}
+                    status={status}
+                    hasChatConfig={hasChatConfig}
+                    canGenerate={canGenerate}
+                    onOptimize={optimizePrompt}
+                    onRestorePrompt={restorePromptBeforeOptimization}
+                    canRestorePrompt={promptBeforeOptimization !== null}
+                    onGenerate={() => {
+                      void generate();
+                      setMobileDesignSettingsOpen(false);
+                    }}
+                    onError={(message) => pushToast("error", message)}
+                  />
                 </div>
-              </>
-            ) : null}
-          </aside>
-
-          <div className="workspace-main">
-            <div className={activeSection === "design" ? "flex min-h-0 flex-1" : "hidden"}>
-              <Gallery
-                isActive={activeSection === "design"}
-                status={status}
-                batches={generationBatches}
-                activeBatchId={activeGenerationBatchId}
-                count={status === "generating" ? pendingGenerationCount : count}
-                isGeneratingVariant={status === "generating"}
-                onGenerateMultiView={generateMultiView}
-                onGenerateScene={generateScene}
-                onGenerateFromPrompt={generateFromImagePrompt}
-                onGenerateDesignDescription={generateDesignDescription}
-                designDescriptionLoadingIds={designDescriptionLoadingIds}
-                onLocalEdit={generateLocalEdit}
-                onGenerateCustom={generateCustomCanvas}
-                onOptimizeCustom={optimizeCustomCanvasPrompt}
-                hasChatConfig={hasChatConfig}
-                onOpenSettings={() => setMobileDesignSettingsOpen(true)}
-                historyStats={localHistoryStats}
-                isHistoryReady={isLocalHistoryReady}
-                onRefreshHistoryStats={refreshHistoryStats}
-                onExportProject={exportLocalProject}
-                onImportProject={importLocalProject}
-                onClearHistory={clearLocalHistory}
-                onError={(message) => pushToast("error", message)}
-                onSuccess={(message) => pushToast("success", message)}
-              />
-            </div>
+                <div className="design-gallery-pane">
+                  <Gallery
+                    isActive={activeSection === "design"}
+                    status={status}
+                    batches={generationBatches}
+                    activeBatchId={activeGenerationBatchId}
+                    count={status === "generating" ? pendingGenerationCount : count}
+                    isGeneratingVariant={status === "generating"}
+                    onGenerateMultiView={generateMultiView}
+                    onGenerateScene={generateScene}
+                    onGenerateFromPrompt={generateFromImagePrompt}
+                    onGenerateDesignDescription={generateDesignDescription}
+                    designDescriptionLoadingIds={designDescriptionLoadingIds}
+                    onLocalEdit={generateLocalEdit}
+                    onGenerateCustom={generateCustomCanvas}
+                    onOptimizeCustom={optimizeCustomCanvasPrompt}
+                    hasChatConfig={hasChatConfig}
+                    onOpenSettings={() => setMobileDesignSettingsOpen(true)}
+                    historyStats={localHistoryStats}
+                    isHistoryReady={isLocalHistoryReady}
+                    onRefreshHistoryStats={refreshHistoryStats}
+                    onExportProject={exportLocalProject}
+                    onImportProject={importLocalProject}
+                    onClearHistory={clearLocalHistory}
+                    onError={(message) => pushToast("error", message)}
+                    onSuccess={(message) => pushToast("success", message)}
+                  />
+                </div>
+              </div>
+            </section>
 
             {activeSection === "research" ? (
               <ResearchSection
@@ -1276,6 +1321,8 @@ export default function Home() {
               />
             ) : null}
 
+            {activeSection === "vent" ? <VentEditor /> : null}
+
             {activeSection === "api" ? (
               <ApiSection
                 authCode={authDraft}
@@ -1286,7 +1333,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        <span className="app-version" aria-label="当前版本 v1.0.1">v1.0.1</span>
+        <span className="app-version" aria-label="当前版本 v1.0.2">v1.0.2</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}
@@ -1338,6 +1385,14 @@ function WorkspaceNav({
             <Palette className="h-4 w-4" />
             <span>外观设计</span>
           </button>
+          <button
+            type="button"
+            className={`workspace-nav-item ${activeSection === "vent" ? "active" : ""}`}
+            onClick={() => onChange("vent")}
+          >
+            <Grid3X3 className="h-4 w-4" />
+            <span>网孔编辑</span>
+          </button>
         </div>
       </div>
 
@@ -1370,7 +1425,7 @@ function ResearchSection({
   input: string;
   setInput: (value: string) => void;
   files: ResearchFile[];
-  addFiles: (files: FileList | null) => void;
+  addFiles: (files: FileList | null) => Promise<void>;
   messages: ResearchMessage[];
   isListening: boolean;
   isResponding: boolean;
@@ -1412,13 +1467,6 @@ function ResearchSection({
 
   return (
     <section className="section-surface">
-      <div className="section-header">
-        <div>
-          <h1 className="section-title">策划研究</h1>
-          <p className="section-subtitle">围绕品牌、用户、竞品与场景做资料整理和研究拆解。</p>
-        </div>
-      </div>
-
       <div className="research-shell">
         <div className="research-stream">
           {messages.map((message) => (
@@ -1457,8 +1505,9 @@ function ResearchSection({
               ) : null}
               {message.files?.length ? (
                 <div className="research-chip-row">
-                  {message.files.map((file) => (
-                    <span key={`${message.id}-${file.name}`} className="research-chip">
+                  {message.files.map((file, index) => (
+                    <span key={`${message.id}-${file.name}-${index}`} className="research-chip research-file-chip">
+                      <img src={file.dataUrl} alt="" className="research-file-thumb" />
                       {file.name}
                     </span>
                   ))}
@@ -1500,13 +1549,20 @@ function ResearchSection({
           onDrop={(event) => {
             event.preventDefault();
             setIsDragOver(false);
-            addFiles(event.dataTransfer.files);
+            void addFiles(event.dataTransfer.files);
           }}
         >
           {files.length ? (
             <div className="research-chip-row research-chip-stack">
               {files.map((file, index) => (
-                <button key={`${file.name}-${index}`} type="button" className="research-chip dismissible" onClick={() => onRemoveFile(index)}>
+                <button
+                  key={`${file.name}-${index}`}
+                  type="button"
+                  className="research-chip research-file-chip dismissible"
+                  onClick={() => onRemoveFile(index)}
+                  title="点击移除"
+                >
+                  <img src={file.dataUrl} alt="" className="research-file-thumb" />
                   {file.name}
                 </button>
               ))}
@@ -1546,9 +1602,10 @@ function ResearchSection({
             ref={fileInputRef}
             className="hidden"
             type="file"
+            accept="image/*"
             multiple
             onChange={(event) => {
-              addFiles(event.target.files);
+              void addFiles(event.target.files);
               event.target.value = "";
             }}
           />
@@ -1740,4 +1797,19 @@ function getImageSizeOption(dataUrl: string, fallback: string) {
 
 function normalizeAuthCode(value: string) {
   return value.trim().toLowerCase();
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error(`${file.name} 读取失败，请重新上传。`));
+    };
+    reader.onerror = () => reject(new Error(`${file.name} 读取失败，请重新上传。`));
+    reader.readAsDataURL(file);
+  });
 }

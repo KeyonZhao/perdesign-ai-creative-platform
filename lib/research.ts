@@ -8,6 +8,10 @@ const execFileAsync = promisify(execFile);
 type ResearchConversationMessage = {
   role: "assistant" | "user";
   content: string;
+  images?: Array<{
+    name: string;
+    dataUrl: string;
+  }>;
 };
 
 type KnowledgeDocument = {
@@ -48,14 +52,16 @@ export async function generateResearchReply(params: {
 }) {
   const latestUserMessage = [...params.conversation].reverse().find((message) => message.role === "user")?.content || "";
 
-  if (shouldHandleSmallTalk(params.conversation, latestUserMessage)) {
+  const hasUploadedImages = params.conversation.some((message) => message.images?.length);
+
+  if (!hasUploadedImages && shouldHandleSmallTalk(params.conversation, latestUserMessage)) {
     return {
       answer: buildSmallTalkReply(latestUserMessage),
       sources: []
     } satisfies ResearchReply;
   }
 
-  if (shouldPromptProjectBrief(params.conversation)) {
+  if (!hasUploadedImages && shouldPromptProjectBrief(params.conversation)) {
     return {
       answer: [
         "这是一个新项目启动类需求。为了保证后续策略分析足够完整，请先填写项目基础信息表：",
@@ -81,7 +87,15 @@ export async function generateResearchReply(params: {
       },
       ...params.conversation.map((message) => ({
         role: message.role,
-        content: message.content
+        content: message.images?.length
+          ? [
+              { type: "text" as const, text: message.content },
+              ...message.images.map((image) => ({
+                type: "image_url" as const,
+                image_url: { url: image.dataUrl }
+              }))
+            ]
+          : message.content
       }))
     ]
   });
@@ -306,6 +320,7 @@ function buildResearchSystemPrompt(
     "- 优先使用下面给出的知识库内容作为判断依据。",
     "- 如果知识库里有依据，请自然引用来源文件名。",
     "- 如果知识库没有直接答案，可以补充通用商业与产品策略判断，但不要伪造知识库内容。",
+    "- 用户上传图片时，必须直接观察图片内容并结合用户问题分析，不得仅根据文件名猜测，也不要声称自己看不到已上传的图片。",
     "- 输出应达到可直接用于客户汇报或指导设计团队的专业水准。",
     "",
     `新项目启动时，如果用户信息明显不足，请先让用户填写项目表单：${PROJECT_BRIEF_LINK}`,

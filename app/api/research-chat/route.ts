@@ -3,9 +3,15 @@ import { z } from "zod";
 import { resolveProviderConfig } from "@/lib/provider";
 import { generateResearchReply } from "@/lib/research";
 
+const imageSchema = z.object({
+  name: z.string().min(1),
+  dataUrl: z.string().startsWith("data:image/")
+});
+
 const messageSchema = z.object({
   role: z.enum(["assistant", "user"]),
-  content: z.string().min(1)
+  content: z.string().min(1),
+  images: z.array(imageSchema).max(4).optional()
 });
 
 const requestSchema = z.object({

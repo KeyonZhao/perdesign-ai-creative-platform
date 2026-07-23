@@ -133,10 +133,6 @@ export function Gallery({
   return (
     <section className="content-panel flex min-h-0 flex-1 flex-col">
       <div className="gallery-header">
-        <div>
-          <h2 className="gallery-title">方案画廊</h2>
-          <p className="gallery-subtitle">产品变款、参考风格与批量导出</p>
-        </div>
         <div className="gallery-header-actions">
           <button className="btn-secondary mobile-design-settings-button" onClick={onOpenSettings}>
             <SlidersHorizontal className="h-4 w-4" />
