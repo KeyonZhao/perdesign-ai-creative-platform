@@ -12,8 +12,9 @@ type ImagePreviewModalProps = {
   isGeneratingDesignDescription?: boolean;
   onGenerateMultiView?: (result: GenerationResult) => void;
   onGenerateScene?: (result: GenerationResult) => void;
+  onGenerateFromPrompt?: (result: GenerationResult, instruction: string) => void;
   onGenerateDesignDescription?: (result: GenerationResult) => Promise<string>;
-  onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string) => void;
+  onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) => void;
   startEditing?: boolean;
   metadata?: GenerationMetadata | null;
   result: GenerationResult | null;
@@ -33,6 +34,7 @@ export function ImagePreviewModal({
   onClose,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateFromPrompt,
   onGenerateDesignDescription,
   onLocalEdit,
   startEditing = false,
@@ -41,6 +43,7 @@ export function ImagePreviewModal({
   isGeneratingDesignDescription = false
 }: ImagePreviewModalProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const brushCursorRef = useRef<HTMLDivElement | null>(null);
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const historyRef = useRef<MaskSnapshot[]>([]);
@@ -50,6 +53,7 @@ export function ImagePreviewModal({
   const [paintTool, setPaintTool] = useState<PaintTool>("brush");
   const [brushSize, setBrushSize] = useState(42);
   const [instruction, setInstruction] = useState("");
+  const [imagePrompt, setImagePrompt] = useState("");
   const [hasMask, setHasMask] = useState(false);
   const [historyCount, setHistoryCount] = useState(0);
   const [designDescription, setDesignDescription] = useState(result?.designDescription || "");
@@ -63,6 +67,7 @@ export function ImagePreviewModal({
     setIsEditing(startEditing);
     setPaintTool("brush");
     setInstruction("");
+    setImagePrompt("");
     setHasMask(false);
     historyRef.current = [];
     setHistoryCount(0);
@@ -87,6 +92,10 @@ export function ImagePreviewModal({
     metadata?.generationType === "multi-view" ||
     savedDescription === LEGACY_SCENE_PROMPT ||
     savedDescription === LEGACY_MULTI_VIEW_PROMPT;
+  const hasInnovationValue =
+    Boolean(metadata) &&
+    metadata?.generationType !== "scene" &&
+    metadata?.generationType !== "multi-view";
   const canCollapseDescription = savedDescription.length > 88;
 
   function initializeCanvas(image: HTMLImageElement) {
@@ -111,6 +120,20 @@ export function ImagePreviewModal({
       y: ((event.clientY - rect.top) / rect.height) * canvas.height,
       scale: canvas.width / rect.width
     };
+  }
+
+  function updateBrushCursor(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    const cursor = brushCursorRef.current;
+    if (!canvas || !cursor || event.pointerType === "touch") return;
+    const rect = canvas.getBoundingClientRect();
+    cursor.style.left = `${event.clientX - rect.left}px`;
+    cursor.style.top = `${event.clientY - rect.top}px`;
+    cursor.style.opacity = "1";
+  }
+
+  function hideBrushCursor() {
+    if (brushCursorRef.current) brushCursorRef.current.style.opacity = "0";
   }
 
   function saveSnapshot() {
@@ -144,6 +167,7 @@ export function ImagePreviewModal({
 
   function startDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (isGeneratingVariant) return;
+    updateBrushCursor(event);
     const point = getCanvasPoint(event);
     if (!point) return;
     saveSnapshot();
@@ -155,6 +179,7 @@ export function ImagePreviewModal({
   }
 
   function continueDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
+    updateBrushCursor(event);
     if (!isDrawingRef.current) return;
     const point = getCanvasPoint(event);
     const lastPoint = lastPointRef.current;
@@ -197,33 +222,115 @@ export function ImagePreviewModal({
     if (!paintCanvas || !paintContext) return null;
 
     const paintData = paintContext.getImageData(0, 0, paintCanvas.width, paintCanvas.height);
+    const selectionCanvas = document.createElement("canvas");
+    selectionCanvas.width = paintCanvas.width;
+    selectionCanvas.height = paintCanvas.height;
+    const selectionContext = selectionCanvas.getContext("2d");
+    if (!selectionContext) return null;
+
+    const selectionData = selectionContext.createImageData(selectionCanvas.width, selectionCanvas.height);
+    let selectedPixelCount = 0;
+    for (let index = 0; index < paintData.data.length; index += 4) {
+      const selected = paintData.data[index + 3] > 0;
+      selectionData.data[index] = 255;
+      selectionData.data[index + 1] = 255;
+      selectionData.data[index + 2] = 255;
+      selectionData.data[index + 3] = selected ? 255 : 0;
+      if (selected) selectedPixelCount += 1;
+    }
+    if (!selectedPixelCount) return null;
+    selectionContext.putImageData(selectionData, 0, 0);
+
+    const minimumDimension = Math.min(paintCanvas.width, paintCanvas.height);
+    const displayWidth = paintCanvas.getBoundingClientRect().width;
+    const displayScale = displayWidth > 0 ? paintCanvas.width / displayWidth : 1;
+    const sourceBrushSize = brushSize * displayScale;
+    const expansionBlur = Math.max(
+      18,
+      Math.min(64, Math.round(Math.max(minimumDimension * 0.024, sourceBrushSize * 0.45)))
+    );
+    const featherBlur = Math.max(
+      12,
+      Math.min(30, Math.round(Math.max(minimumDimension * 0.014, sourceBrushSize * 0.22)))
+    );
+    const expandedCanvas = document.createElement("canvas");
+    expandedCanvas.width = paintCanvas.width;
+    expandedCanvas.height = paintCanvas.height;
+    const expandedContext = expandedCanvas.getContext("2d");
+    if (!expandedContext) return null;
+    expandedContext.filter = `blur(${expansionBlur}px)`;
+    expandedContext.drawImage(selectionCanvas, 0, 0);
+    expandedContext.filter = "none";
+
+    const expandedData = expandedContext.getImageData(0, 0, expandedCanvas.width, expandedCanvas.height);
+    for (let index = 0; index < expandedData.data.length; index += 4) {
+      const expanded = expandedData.data[index + 3] > 6;
+      expandedData.data[index] = 255;
+      expandedData.data[index + 1] = 255;
+      expandedData.data[index + 2] = 255;
+      expandedData.data[index + 3] = expanded ? 255 : 0;
+    }
+    expandedContext.putImageData(expandedData, 0, 0);
+
+    const featherCanvas = document.createElement("canvas");
+    featherCanvas.width = paintCanvas.width;
+    featherCanvas.height = paintCanvas.height;
+    const featherContext = featherCanvas.getContext("2d");
+    if (!featherContext) return null;
+    featherContext.filter = `blur(${featherBlur}px)`;
+    featherContext.drawImage(expandedCanvas, 0, 0);
+    featherContext.filter = "none";
+    const featherData = featherContext.getImageData(0, 0, featherCanvas.width, featherCanvas.height);
+
     const maskCanvas = document.createElement("canvas");
     maskCanvas.width = paintCanvas.width;
     maskCanvas.height = paintCanvas.height;
     const maskContext = maskCanvas.getContext("2d");
     if (!maskContext) return null;
-
     const maskData = maskContext.createImageData(maskCanvas.width, maskCanvas.height);
-    let selectedPixelCount = 0;
-    for (let index = 0; index < paintData.data.length; index += 4) {
-      const selected = paintData.data[index + 3] > 0;
+    for (let index = 0; index < maskData.data.length; index += 4) {
       maskData.data[index] = 0;
       maskData.data[index + 1] = 0;
       maskData.data[index + 2] = 0;
-      maskData.data[index + 3] = selected ? 0 : 255;
-      if (selected) selectedPixelCount += 1;
+      maskData.data[index + 3] = 255 - featherData.data[index + 3];
     }
-    if (!selectedPixelCount) return null;
     maskContext.putImageData(maskData, 0, 0);
     return maskCanvas.toDataURL("image/png");
   }
 
-  function submitLocalEdit() {
+  async function createLocalEditGuideDataUrl() {
+    const paintCanvas = canvasRef.current;
+    if (!paintCanvas) return undefined;
+
+    const sourceImage = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("局部修改区域引导图生成失败，请重试。"));
+      image.src = result!.imageBase64!;
+    });
+    const guideCanvas = document.createElement("canvas");
+    guideCanvas.width = paintCanvas.width;
+    guideCanvas.height = paintCanvas.height;
+    const guideContext = guideCanvas.getContext("2d");
+    if (!guideContext) return undefined;
+    guideContext.drawImage(sourceImage, 0, 0, guideCanvas.width, guideCanvas.height);
+    guideContext.drawImage(paintCanvas, 0, 0);
+    return guideCanvas.toDataURL("image/png");
+  }
+
+  async function submitLocalEdit() {
     const trimmedInstruction = instruction.trim();
     if (!trimmedInstruction) return;
     const maskImageBase64 = createMaskDataUrl();
     if (!maskImageBase64) return;
-    onLocalEdit?.(result!, maskImageBase64, trimmedInstruction);
+    const guideImageBase64 = await createLocalEditGuideDataUrl();
+    onLocalEdit?.(result!, maskImageBase64, trimmedInstruction, guideImageBase64);
+  }
+
+  function submitImagePrompt() {
+    const trimmedPrompt = imagePrompt.trim();
+    if (!trimmedPrompt || isGeneratingVariant) return;
+    onGenerateFromPrompt?.(result!, trimmedPrompt);
   }
 
   async function generateDescription() {
@@ -253,7 +360,7 @@ export function ImagePreviewModal({
 
   return (
     <div className="image-preview-backdrop" onClick={onClose}>
-      <div className={`image-preview-dialog ${isEditing ? "editing" : ""}`} onClick={(event) => event.stopPropagation()}>
+      <div className={`image-preview-dialog has-image-prompt ${isEditing ? "editing" : ""}`} onClick={(event) => event.stopPropagation()}>
         <div className="image-preview-toolbar">
           <div className="image-preview-toolbar-actions">
             <button
@@ -366,13 +473,26 @@ export function ImagePreviewModal({
               ref={canvasRef}
               className={`local-edit-canvas ${isEditing ? "active" : ""}`}
               onPointerDown={startDrawing}
+              onPointerEnter={updateBrushCursor}
               onPointerMove={continueDrawing}
               onPointerUp={stopDrawing}
-              onPointerCancel={stopDrawing}
+              onPointerCancel={(event) => {
+                hideBrushCursor();
+                stopDrawing(event);
+              }}
               onPointerLeave={(event) => {
+                hideBrushCursor();
                 if (event.buttons === 0) stopDrawing(event);
               }}
             />
+            {isEditing ? (
+              <div
+                ref={brushCursorRef}
+                className={`local-edit-brush-cursor ${paintTool}`}
+                style={{ width: brushSize, height: brushSize }}
+                aria-hidden="true"
+              />
+            ) : null}
           </div>
 
           <div className="image-preview-sidebar">
@@ -405,11 +525,11 @@ export function ImagePreviewModal({
               <section className="image-preview-info-section">
                 <div className="image-preview-info-row">
                   <span className="image-preview-info-label">创新度</span>
-                  <strong>{metadata ? `${metadata.innovationLevel}%` : "未记录"}</strong>
+                  <strong>{hasInnovationValue ? `${metadata!.innovationLevel}%` : metadata ? "-" : "未记录"}</strong>
                 </div>
-                {metadata ? (
+                {hasInnovationValue ? (
                   <div className="image-preview-innovation-track">
-                    <span style={{ width: `${metadata.innovationLevel}%` }} />
+                    <span style={{ width: `${metadata!.innovationLevel}%` }} />
                   </div>
                 ) : null}
               </section>
@@ -417,6 +537,7 @@ export function ImagePreviewModal({
               <section className="image-preview-info-section">
                 <span className="image-preview-info-label">输入图片</span>
                 <div className="image-preview-source-grid">
+                  <SourceImagePreview label="草图" image={metadata?.sketchImage} />
                   <SourceImagePreview label="产品图" image={metadata?.productImage} />
                   <SourceImagePreview label="参考图" image={metadata?.referenceImage} />
                 </div>
@@ -465,7 +586,7 @@ export function ImagePreviewModal({
               value={instruction}
               onChange={(event) => setInstruction(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.nativeEvent.isComposing) submitLocalEdit();
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) void submitLocalEdit();
               }}
               placeholder="描述涂抹区域需要修改成什么"
               aria-label="局部修改要求"
@@ -473,14 +594,35 @@ export function ImagePreviewModal({
             <button
               type="button"
               className="local-edit-submit"
-              onClick={submitLocalEdit}
+              onClick={() => void submitLocalEdit()}
               disabled={!hasMask || !instruction.trim() || isGeneratingVariant}
               title="生成局部修改方案"
             >
               <SendHorizontal className="h-4 w-4" />
             </button>
           </div>
-        ) : null}
+        ) : (
+          <div className="local-edit-composer image-prompt-composer">
+            <input
+              value={imagePrompt}
+              onChange={(event) => setImagePrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) submitImagePrompt();
+              }}
+              placeholder="描述你想基于这张图片生成什么"
+              aria-label="图片生成文字描述"
+            />
+            <button
+              type="button"
+              className="local-edit-submit"
+              onClick={submitImagePrompt}
+              disabled={!imagePrompt.trim() || isGeneratingVariant || !onGenerateFromPrompt}
+              title="发送图片与文字描述"
+            >
+              {isGeneratingVariant ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

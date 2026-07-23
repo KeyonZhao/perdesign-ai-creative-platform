@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
+  Check,
+  Copy,
   Mic,
   MessageSquareText,
   Palette,
@@ -25,13 +27,21 @@ import {
   type LocalGalleryStats
 } from "@/lib/local-gallery";
 import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
-import { prepareImageForVision } from "@/lib/image";
+import { convertImageDataUrlToPng, prepareImageForVision } from "@/lib/image";
+import {
+  addPendingImageJob,
+  loadPendingImageJobs,
+  removePendingImageJob,
+  type PendingImageJob
+} from "@/lib/pending-image-jobs";
 import type {
+  CustomCanvasGenerationRequest,
   GenerationBatch,
   GenerationResult,
   GenerationSourceImage,
   GenerationStatus,
   GenerationType,
+  ProductInputMode,
   ToastMessage,
   UploadedImage
 } from "@/lib/types";
@@ -48,6 +58,7 @@ const storageKeys = {
   count: "product-workstation-count",
   size: "product-workstation-size",
   quality: "product-workstation-quality",
+  productName: "product-workstation-product-name",
   innovationLevel: "product-workstation-innovation-level"
 };
 
@@ -56,8 +67,9 @@ const AUTH_CODE = "perdesignsg";
 const DEFAULT_IMAGE_API_BASE_URL = "https://img-cn.65535.space/v1";
 const DEFAULT_CHAT_API_BASE_URL = "https://api-cn.65535.space/v1";
 const SCENE_GENERATION_PROMPT = "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图";
-const PRESET_CHAT_API_KEY = "sk-c851cbf75adaf19548d7bca5b8ab0fdcf21be68794c2693210e5ac1ccfd28f08";
-const PRESET_IMAGE_API_KEY = "sk-1d93294f4139baacf11806015bc92a5062f861331c90b315fe148ca74dbb9935";
+const PRESET_CHAT_API_KEY = "server-managed";
+const PRESET_IMAGE_API_KEY = "server-managed";
+const MAX_IMAGE_GENERATION_CONCURRENCY = 20;
 
 type WorkspaceSection = "research" | "design" | "api";
 type ResearchFile = { name: string; size: number };
@@ -66,7 +78,9 @@ type PendingAuthAction =
   | { type: "research" }
   | { type: "multi-view"; result: GenerationResult }
   | { type: "scene"; result: GenerationResult }
-  | { type: "local-edit"; result: GenerationResult; maskImageBase64: string; instruction: string }
+  | { type: "image-prompt"; result: GenerationResult; instruction: string }
+  | { type: "local-edit"; result: GenerationResult; maskImageBase64: string; instruction: string; guideImageBase64?: string }
+  | { type: "custom-generate"; request: CustomCanvasGenerationRequest }
   | null;
 type ResearchMessage = {
   id: string;
@@ -109,13 +123,16 @@ export default function Home() {
     DEFAULT_CHAT_API_BASE_URL
   );
   const imageModel = "gpt-image-2";
+  const [productName, setProductName] = usePersistedState(storageKeys.productName, "");
   const [requirement, setRequirement] = usePersistedState(storageKeys.requirement, "");
   const [count, setCount] = usePersistedNumber(storageKeys.count, 4);
   const [size, setSize] = usePersistedState(storageKeys.size, "1024x1024");
   const [quality, setQuality] = usePersistedState(storageKeys.quality, "high");
+  const [productInputMode, setProductInputMode] = useState<ProductInputMode>("product");
   const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
   const [referenceImage, setReferenceImage] = useState<UploadedImage | null>(null);
   const [innovationLevel, setInnovationLevel] = usePersistedNumber(storageKeys.innovationLevel, 50);
+  const [promptBeforeOptimization, setPromptBeforeOptimization] = useState<string | null>(null);
   const [authDraft, setAuthDraft] = useState("");
   const [authModalValue, setAuthModalValue] = useState("");
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -123,6 +140,7 @@ export default function Home() {
   const [status, setStatus] = useState<GenerationStatus>("idle");
   const [generationBatches, setGenerationBatches] = useState<GenerationBatch[]>([]);
   const generationBatchesRef = useRef<GenerationBatch[]>([]);
+  const hasRecoveredPendingJobsRef = useRef(false);
   const designDescriptionTasksRef = useRef<Map<string, Promise<string>>>(new Map());
   const [designDescriptionLoadingIds, setDesignDescriptionLoadingIds] = useState<string[]>([]);
   const [localHistoryStats, setLocalHistoryStats] = useState<LocalGalleryStats | null>(null);
@@ -146,7 +164,7 @@ export default function Home() {
   ]);
   const isAuthorized = normalizeAuthCode(authCode) === AUTH_CODE;
   const hasChatConfig = isAuthorized;
-  const canGenerate = true;
+  const canGenerate = Boolean(productName.trim());
 
   useEffect(() => {
     setAuthDraft(authCode);
@@ -213,6 +231,60 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isLocalHistoryReady || !isAuthorized || hasRecoveredPendingJobsRef.current) return;
+    hasRecoveredPendingJobsRef.current = true;
+    const pendingJobs = loadPendingImageJobs();
+    if (!pendingJobs.length) return;
+
+    let cancelled = false;
+    const config = getResolvedConfig();
+    setStatus("generating");
+    setPendingGenerationCount(pendingJobs.length);
+    setActiveGenerationBatchId(pendingJobs.at(-1)?.batchId || null);
+    pushToast("info", `正在恢复 ${pendingJobs.length} 个未完成的生图任务。`);
+
+    void Promise.allSettled(
+      pendingJobs.map(async (job) => {
+        try {
+          const imageBase64 = await pollImageJob(job.jobId, config);
+          if (cancelled) return;
+          removePendingImageJob(job.jobId);
+          await upsertRecoveredJobResult(job, {
+            id: `async-job-${job.jobId}`,
+            title: `Concept ${String(job.sequence).padStart(2, "0")}`,
+            prompt: job.prompt,
+            imageBase64
+          });
+        } catch (error) {
+          if (cancelled) return;
+          if (error instanceof TerminalImageJobError) removePendingImageJob(job.jobId);
+          await upsertRecoveredJobResult(job, {
+            id: `async-job-${job.jobId}`,
+            title: `Concept ${String(job.sequence).padStart(2, "0")}`,
+            prompt: job.prompt,
+            error: error instanceof Error ? error.message : "任务恢复失败，请稍后刷新重试。"
+          });
+        } finally {
+          if (!cancelled) {
+            setPendingGenerationCount((current) => Math.max(0, current - 1));
+          }
+        }
+      })
+    ).then(() => {
+      if (cancelled) return;
+      setStatus("success");
+      setPendingGenerationCount(0);
+      pushToast("success", "未完成的生图任务已恢复。");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+    // Pending jobs are intentionally restored once from the latest refs and persisted config.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthorized, isLocalHistoryReady]);
+
   function pushToast(type: ToastMessage["type"], message: string) {
     const toast = { id: makeId("toast"), type, message };
     setToasts((current) => [...current, toast]);
@@ -239,6 +311,89 @@ export default function Home() {
         ? "浏览器本地空间不足，这张图片未能自动保存。请导出并清理部分历史作品。"
         : error instanceof Error ? error.message : "图片已生成，但本地保存失败。";
       pushToast("error", message);
+    }
+  }
+
+  async function pollImageJob(
+    jobId: string,
+    config: {
+      imageApiKey: string;
+      imageApiBaseUrl: string;
+    }
+  ) {
+    let consecutiveQueryFailures = 0;
+
+    while (true) {
+      try {
+        const response = await fetch("/api/generate/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageApiKey: config.imageApiKey,
+            imageApiBaseUrl: config.imageApiBaseUrl,
+            jobId
+          })
+        });
+        const data = await readApiResponse<{
+          status?: "pending" | "running" | "done" | "failed";
+          imageBase64?: string;
+          error?: string;
+        }>(response);
+
+        if (data.status === "done" && data.imageBase64) return data.imageBase64;
+        if (data.status === "failed" || response.status === 422) {
+          throw new TerminalImageJobError(data.error || "图片生成任务失败。");
+        }
+        if (!response.ok && response.status !== 202) {
+          throw new Error(data.error || `任务查询失败（${response.status}）。`);
+        }
+        consecutiveQueryFailures = 0;
+        await waitForImageJobPoll(2000);
+      } catch (error) {
+        if (error instanceof TerminalImageJobError) throw error;
+        consecutiveQueryFailures += 1;
+        if (consecutiveQueryFailures >= 6) {
+          throw new Error(
+            `暂时无法查询生图任务，任务编号 ${jobId} 已保留。刷新页面后会继续恢复。`
+          );
+        }
+        await waitForImageJobPoll(Math.min(6000, 1000 * consecutiveQueryFailures));
+      }
+    }
+  }
+
+  async function upsertRecoveredJobResult(job: PendingImageJob, result: GenerationResult) {
+    let updatedBatch: GenerationBatch | undefined;
+    const currentBatches = generationBatchesRef.current;
+    const hasBatch = currentBatches.some((batch) => batch.id === job.batchId);
+    const nextBatches = hasBatch
+      ? currentBatches.map((batch) => {
+          if (batch.id !== job.batchId) return batch;
+          const existingIndex = batch.results.findIndex((item) => item.id === result.id);
+          const results = existingIndex >= 0
+            ? batch.results.map((item, index) => index === existingIndex ? result : item)
+            : [...batch.results, result];
+          updatedBatch = { ...batch, results: sortGenerationResults(results) };
+          return updatedBatch;
+        })
+      : [
+          ...currentBatches,
+          (updatedBatch = {
+            id: job.batchId,
+            results: [result],
+            metadata: {
+              description: job.prompt,
+              innovationLevel: 50,
+              generationType: "design"
+            }
+          })
+        ];
+
+    generationBatchesRef.current = nextBatches;
+    setGenerationBatches(nextBatches);
+    if (updatedBatch) {
+      await saveLocalGenerationBatch(updatedBatch);
+      await refreshHistoryStats();
     }
   }
 
@@ -340,8 +495,14 @@ export default function Home() {
       case "scene":
         void generateSceneCore(action.result, forceAuthorized);
         break;
+      case "image-prompt":
+        void generateFromImagePromptCore(action.result, action.instruction, forceAuthorized);
+        break;
       case "local-edit":
-        void generateLocalEditCore(action.result, action.maskImageBase64, action.instruction, forceAuthorized);
+        void generateLocalEditCore(action.result, action.maskImageBase64, action.instruction, action.guideImageBase64, forceAuthorized);
+        break;
+      case "custom-generate":
+        void generateCustomCanvasCore(action.request, forceAuthorized);
         break;
       default:
         break;
@@ -398,10 +559,14 @@ export default function Home() {
     const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
     if (!unlocked) return openAuthModal();
     if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
-    if (!requirement.trim()) return pushToast("error", "请先输入变款要求。");
+    if (!productName.trim()) return pushToast("error", "请先填写产品名称。");
 
     setStatus("optimizing");
     try {
+      const [subjectImageForOptimization, referenceImageForOptimization] = await Promise.all([
+        uploadedImage ? prepareImageForVision(uploadedImage.dataUrl, 1600, 0.82) : Promise.resolve(undefined),
+        referenceImage ? prepareImageForVision(referenceImage.dataUrl, 1600, 0.82) : Promise.resolve(undefined)
+      ]);
       const response = await fetch("/api/optimize-prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -409,18 +574,68 @@ export default function Home() {
           apiKey: resolvedChatApiKey,
           baseUrl: resolvedChatApiBaseUrl,
           model: BRAIN_MODEL,
-          userPrompt: requirement
+          productName: productName.trim(),
+          userPrompt: requirement,
+          productImageBase64: productInputMode === "product" ? subjectImageForOptimization : undefined,
+          sketchImageBase64: productInputMode === "sketch" ? subjectImageForOptimization : undefined,
+          referenceImageBase64: referenceImageForOptimization,
+          innovationLevel
         })
       });
       const data = await readApiResponse<{ optimizedPrompt?: string; error?: string }>(response);
       if (!response.ok || !data.optimizedPrompt) throw new Error(data.error || "提示词优化失败。");
+      setPromptBeforeOptimization(requirement);
       setRequirement(data.optimizedPrompt);
       setStatus("idle");
-      pushToast("success", "提示词已优化并回填。");
+      pushToast("success", "提示词已撰写并回填。");
     } catch (error) {
       setStatus("error");
       pushToast("error", error instanceof Error ? error.message : "提示词优化失败。");
     }
+  }
+
+  async function optimizeCustomCanvasPrompt(request: CustomCanvasGenerationRequest) {
+    const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
+    if (!unlocked) {
+      openAuthModal();
+      throw new Error("请先完成认证，再使用 AI 撰写提示词。");
+    }
+    if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) {
+      throw new Error("当前认证信息不可用，请重新输入认证码。");
+    }
+
+    const [productImageForOptimization, referenceImageForOptimization] = await Promise.all([
+      prepareImageForVision(request.sourceImage.dataUrl, 1600, 0.82),
+      request.referenceImage
+        ? prepareImageForVision(request.referenceImage.dataUrl, 1600, 0.82)
+        : Promise.resolve(undefined)
+    ]);
+    const response = await fetch("/api/optimize-prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiKey: resolvedChatApiKey,
+        baseUrl: resolvedChatApiBaseUrl,
+        model: BRAIN_MODEL,
+        productName: request.productName,
+        userPrompt: request.requirement,
+        productImageBase64: productImageForOptimization,
+        referenceImageBase64: referenceImageForOptimization,
+        innovationLevel: request.innovationLevel
+      })
+    });
+    const data = await readApiResponse<{ optimizedPrompt?: string; error?: string }>(response);
+    if (!response.ok || !data.optimizedPrompt) {
+      throw new Error(data.error || "提示词撰写失败，请稍后重试。");
+    }
+    return data.optimizedPrompt;
+  }
+
+  function restorePromptBeforeOptimization() {
+    if (promptBeforeOptimization === null) return;
+    setRequirement(promptBeforeOptimization);
+    setPromptBeforeOptimization(null);
+    pushToast("info", "已恢复优化前的文字内容。");
   }
 
   async function generate() {
@@ -433,12 +648,12 @@ export default function Home() {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
-    if (!uploadedImage && !referenceImage && !requirement.trim()) {
-      return pushToast("error", "请至少输入提示词，或上传产品图 / 参考图。");
-    }
+    if (!productName.trim()) return pushToast("error", "请先填写产品名称。");
 
     await runGeneration({
-      productImage: uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
+      productName: productName.trim(),
+      sketchImage: productInputMode === "sketch" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
+      productImage: productInputMode === "product" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
       referenceImage: referenceImage ? { name: referenceImage.name, dataUrl: referenceImage.dataUrl } : undefined,
       innovationLevel,
       requirement,
@@ -446,7 +661,44 @@ export default function Home() {
     }, forceAuthorized);
   }
 
+  function generateCustomCanvas(request: CustomCanvasGenerationRequest) {
+    if (!ensureAuthorized({ type: "custom-generate", request })) return false;
+    void generateCustomCanvasCore(request);
+    return true;
+  }
+
+  async function generateCustomCanvasCore(request: CustomCanvasGenerationRequest, forceAuthorized = false) {
+    if (!isLocalHistoryReady) {
+      pushToast("info", "正在恢复本地作品，请稍候再生成。");
+      return;
+    }
+    const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
+    if (!unlocked) return;
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
+      pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+      return;
+    }
+    if (!request.productName.trim() || !request.sourceImage.dataUrl) {
+      pushToast("error", "请先填写产品名称并上传需要编辑的图片。");
+      return;
+    }
+
+    await runGeneration({
+      productName: request.productName.trim(),
+      productImage: { name: request.sourceImage.name, dataUrl: request.sourceImage.dataUrl },
+      referenceImage: request.referenceImage
+        ? { name: request.referenceImage.name, dataUrl: request.referenceImage.dataUrl }
+        : undefined,
+      innovationLevel: request.innovationLevel,
+      requirement: request.requirement,
+      count: request.count,
+      sizeOverride: request.size
+    }, forceAuthorized);
+  }
+
   async function runGeneration(params: {
+    productName?: string;
+    sketchImage?: GenerationSourceImage;
     productImage?: GenerationSourceImage;
     referenceImage?: GenerationSourceImage;
     innovationLevel: number;
@@ -456,67 +708,150 @@ export default function Home() {
     metadataDescription?: string;
     sizeOverride?: string;
     maskImageBase64?: string;
+    localEditGuideImageBase64?: string;
+    useExactPrompt?: boolean;
   }, forceAuthorized = false) {
     const config = getResolvedConfig(forceAuthorized);
     const batchId = makeId("generation-batch");
+    const existingBatches = generationBatchesRef.current;
+    const existingResultCount = existingBatches.reduce((sum, batch) => sum + batch.results.length, 0);
+    const progressiveBatch: GenerationBatch = {
+      id: batchId,
+      results: [],
+      metadata: {
+        description: params.metadataDescription ?? params.requirement,
+        innovationLevel: params.innovationLevel,
+        generationType: params.generationType || "design",
+        sketchImage: params.sketchImage,
+        productImage: params.productImage,
+        referenceImage: params.referenceImage
+      }
+    };
+    const batchesWithProgressiveBatch = [...existingBatches, progressiveBatch];
+    generationBatchesRef.current = batchesWithProgressiveBatch;
+    setGenerationBatches(batchesWithProgressiveBatch);
     setActiveGenerationBatchId(batchId);
     setPendingGenerationCount(params.count);
     setStatus("generating");
-    try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageApiKey: config.imageApiKey,
-          imageApiBaseUrl: config.imageApiBaseUrl,
-          chatApiKey: config.chatApiKey,
-          chatApiBaseUrl: config.chatApiBaseUrl,
-          brainModel: BRAIN_MODEL,
-          imageModel,
-          imageBase64: params.productImage?.dataUrl,
-          maskImageBase64: params.maskImageBase64,
-          referenceImageBase64: params.referenceImage?.dataUrl,
-          innovationLevel: params.innovationLevel,
-          requirement: params.requirement,
-          count: params.count,
-          size: params.sizeOverride || size,
-          quality
-        })
-      });
+    await persistGeneratedBatch(progressiveBatch);
 
-      const data = await readApiResponse<{ results?: GenerationResult[]; error?: string }>(response);
-      if (!response.ok || !data.results) throw new Error(data.error || "生成失败，请稍后重试。");
-      const nextResults = data.results;
+    let nextRequestIndex = 0;
+    let completedCount = 0;
+    let failedCount = 0;
 
-      const currentBatches = generationBatchesRef.current;
-      const existingCount = currentBatches.reduce((sum, batch) => sum + batch.results.length, 0);
-      const numberedResults = nextResults.map((result, index) => {
-        const sequence = existingCount + index + 1;
-        return {
-          ...result,
-          title: `Concept ${String(sequence).padStart(2, "0")}`,
-          prompt: result.prompt?.trim() || params.requirement
-        };
-      });
-      const completedBatch: GenerationBatch = {
-        id: batchId,
-        results: numberedResults,
-        metadata: {
-          description: params.metadataDescription ?? params.requirement,
-          innovationLevel: params.innovationLevel,
-          generationType: params.generationType || "design",
-          productImage: params.productImage,
-          referenceImage: params.referenceImage
+    async function requestSingleResult(requestIndex: number): Promise<GenerationResult> {
+      let submittedJobId = "";
+      const sequence = existingResultCount + requestIndex + 1;
+      try {
+        const response = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageApiKey: config.imageApiKey,
+            imageApiBaseUrl: config.imageApiBaseUrl,
+            chatApiKey: config.chatApiKey,
+            chatApiBaseUrl: config.chatApiBaseUrl,
+            brainModel: BRAIN_MODEL,
+            imageModel,
+            productName: params.productName,
+            sketchImageBase64: params.sketchImage?.dataUrl,
+            imageBase64: params.productImage?.dataUrl,
+            maskImageBase64: params.maskImageBase64,
+            localEditGuideImageBase64: params.localEditGuideImageBase64,
+            referenceImageBase64: params.referenceImage?.dataUrl,
+            innovationLevel: params.innovationLevel,
+            requirement: params.requirement,
+            useExactPrompt: params.useExactPrompt,
+            count: 1,
+            size: params.sizeOverride || size,
+            quality
+          })
+        });
+
+        const data = await readApiResponse<{
+          jobId?: string;
+          status?: string;
+          prompt?: string;
+          error?: string;
+        }>(response);
+        if (!response.ok || !data.jobId) {
+          throw new Error(data.error || "未能创建生图任务，请稍后重试。");
         }
+
+        submittedJobId = data.jobId;
+        const prompt = data.prompt?.trim() || params.requirement;
+        addPendingImageJob({
+          jobId: submittedJobId,
+          batchId,
+          prompt,
+          sequence,
+          createdAt: Date.now()
+        });
+        const imageBase64 = await pollImageJob(submittedJobId, config);
+        removePendingImageJob(submittedJobId);
+        return {
+          id: `async-job-${submittedJobId}`,
+          title: "",
+          prompt,
+          imageBase64
+        };
+      } catch (error) {
+        if (submittedJobId && error instanceof TerminalImageJobError) {
+          removePendingImageJob(submittedJobId);
+        }
+        return {
+          id: submittedJobId ? `async-job-${submittedJobId}` : makeId(`failed-concept-${requestIndex}`),
+          title: "",
+          prompt: params.requirement,
+          error: error instanceof Error ? error.message : "生成失败，请检查配置后重试。"
+        };
+      }
+    }
+
+    function appendCompletedResult(result: GenerationResult, sequence: number) {
+      completedCount += 1;
+      if (result.error) failedCount += 1;
+      const numberedResult = {
+        ...result,
+        title: `Concept ${String(sequence).padStart(2, "0")}`,
+        prompt: result.prompt?.trim() || params.requirement
       };
-      const nextBatches = [...currentBatches, completedBatch];
+      let updatedBatch: GenerationBatch | undefined;
+      const nextBatches = generationBatchesRef.current.map((batch) => {
+        if (batch.id !== batchId) return batch;
+        const existingIndex = batch.results.findIndex((item) => item.id === numberedResult.id);
+        const results = existingIndex >= 0
+          ? batch.results.map((item, index) => index === existingIndex ? numberedResult : item)
+          : [...batch.results, numberedResult];
+        updatedBatch = { ...batch, results: sortGenerationResults(results) };
+        return updatedBatch;
+      });
       generationBatchesRef.current = nextBatches;
       setGenerationBatches(nextBatches);
-      void persistGeneratedBatch(completedBatch);
+      setPendingGenerationCount((current) => Math.max(0, current - 1));
+      if (updatedBatch) void persistGeneratedBatch(updatedBatch);
+    }
+
+    async function generationWorker() {
+      while (true) {
+        const requestIndex = nextRequestIndex;
+        nextRequestIndex += 1;
+        if (requestIndex >= params.count) return;
+        appendCompletedResult(
+          await requestSingleResult(requestIndex),
+          existingResultCount + requestIndex + 1
+        );
+      }
+    }
+
+    try {
+      const workerCount = Math.min(MAX_IMAGE_GENERATION_CONCURRENCY, params.count);
+      await Promise.all(Array.from({ length: workerCount }, () => generationWorker()));
+      const completedBatch = generationBatchesRef.current.find((batch) => batch.id === batchId);
+      if (completedBatch) void persistGeneratedBatch(completedBatch);
       setPendingGenerationCount(0);
       setStatus("success");
-      const failed = nextResults.filter((result) => result.error).length;
-      pushToast(failed ? "info" : "success", failed ? `已完成，${failed} 个方案生成失败。` : "全部方案生成完成。");
+      pushToast(failedCount ? "info" : "success", failedCount ? `已完成，${failedCount} 个方案生成失败。` : "全部方案生成完成。");
     } catch (error) {
       setPendingGenerationCount(0);
       setStatus("error");
@@ -569,15 +904,53 @@ export default function Home() {
     }, forceAuthorized);
   }
 
-  async function generateLocalEdit(result: GenerationResult, maskImageBase64: string, instruction: string) {
-    if (!ensureAuthorized({ type: "local-edit", result, maskImageBase64, instruction })) return;
-    await generateLocalEditCore(result, maskImageBase64, instruction);
+  async function generateFromImagePrompt(result: GenerationResult, instruction: string) {
+    const trimmedInstruction = instruction.trim();
+    if (!trimmedInstruction) return pushToast("error", "请输入文字描述。");
+    if (!ensureAuthorized({ type: "image-prompt", result, instruction: trimmedInstruction })) return;
+    await generateFromImagePromptCore(result, trimmedInstruction);
+  }
+
+  async function generateFromImagePromptCore(
+    result: GenerationResult,
+    instruction: string,
+    forceAuthorized = false
+  ) {
+    const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } =
+      getResolvedConfig(forceAuthorized);
+    if (!unlocked) return;
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
+      return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    }
+    if (!result.imageBase64) return pushToast("error", "当前图片不可用于继续生成。");
+
+    const pngSourceImage = await convertImageDataUrlToPng(result.imageBase64);
+    const sourceSize = await getImageSizeOption(pngSourceImage, size);
+    await runGeneration(
+      {
+        productImage: { name: `${result.title}.png`, dataUrl: pngSourceImage },
+        innovationLevel: 50,
+        requirement: instruction.trim(),
+        count: 1,
+        generationType: "image-prompt",
+        metadataDescription: instruction.trim(),
+        sizeOverride: sourceSize,
+        useExactPrompt: true
+      },
+      forceAuthorized
+    );
+  }
+
+  async function generateLocalEdit(result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) {
+    if (!ensureAuthorized({ type: "local-edit", result, maskImageBase64, instruction, guideImageBase64 })) return;
+    await generateLocalEditCore(result, maskImageBase64, instruction, guideImageBase64);
   }
 
   async function generateLocalEditCore(
     result: GenerationResult,
     maskImageBase64: string,
     instruction: string,
+    guideImageBase64?: string,
     forceAuthorized = false
   ) {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
@@ -586,16 +959,15 @@ export default function Home() {
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于局部修改。");
     if (!maskImageBase64 || !instruction.trim()) return pushToast("error", "请先涂抹需要修改的区域，并输入修改要求。");
 
-    const sourceSize = await getImageSizeOption(result.imageBase64, size);
+    const pngSourceImage = await convertImageDataUrlToPng(result.imageBase64);
+    const sourceSize = await getImageSizeOption(pngSourceImage, size);
     await runGeneration({
-      productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
+      productImage: { name: `${result.title}.png`, dataUrl: pngSourceImage },
       maskImageBase64,
+      localEditGuideImageBase64: guideImageBase64,
       referenceImage: undefined,
-      innovationLevel: 0,
-      requirement: [
-        "请仅修改透明蒙版标记的涂抹区域。严格保持蒙版外的全部内容不变，包括产品结构、轮廓、构图、视角、比例、背景、光影、材质和细节。不要重绘、移动或改变任何未涂抹区域。",
-        `用户对涂抹区域的修改要求：${instruction.trim()}`
-      ].join("\n"),
+      innovationLevel: 70,
+      requirement: instruction.trim(),
       count: 1,
       generationType: "local-edit",
       metadataDescription: instruction.trim(),
@@ -817,6 +1189,10 @@ export default function Home() {
                     </button>
                   </div>
                 <ControlPanel
+                  productName={productName}
+                  setProductName={setProductName}
+                  productInputMode={productInputMode}
+                  setProductInputMode={setProductInputMode}
                   uploadedImage={uploadedImage}
                   setUploadedImage={setUploadedImage}
                   referenceImage={referenceImage}
@@ -829,12 +1205,12 @@ export default function Home() {
                   setCount={setCount}
                   size={size}
                   setSize={setSize}
-                  quality={quality}
-                  setQuality={setQuality}
                   status={status}
                   hasChatConfig={hasChatConfig}
                   canGenerate={canGenerate}
                   onOptimize={optimizePrompt}
+                  onRestorePrompt={restorePromptBeforeOptimization}
+                  canRestorePrompt={promptBeforeOptimization !== null}
                   onGenerate={() => {
                     void generate();
                     setMobileDesignSettingsOpen(false);
@@ -847,18 +1223,23 @@ export default function Home() {
           </aside>
 
           <div className="workspace-main">
-            {activeSection === "design" ? (
+            <div className={activeSection === "design" ? "flex min-h-0 flex-1" : "hidden"}>
               <Gallery
+                isActive={activeSection === "design"}
                 status={status}
                 batches={generationBatches}
                 activeBatchId={activeGenerationBatchId}
-                count={pendingGenerationCount || count}
+                count={status === "generating" ? pendingGenerationCount : count}
                 isGeneratingVariant={status === "generating"}
                 onGenerateMultiView={generateMultiView}
                 onGenerateScene={generateScene}
+                onGenerateFromPrompt={generateFromImagePrompt}
                 onGenerateDesignDescription={generateDesignDescription}
                 designDescriptionLoadingIds={designDescriptionLoadingIds}
                 onLocalEdit={generateLocalEdit}
+                onGenerateCustom={generateCustomCanvas}
+                onOptimizeCustom={optimizeCustomCanvasPrompt}
+                hasChatConfig={hasChatConfig}
                 onOpenSettings={() => setMobileDesignSettingsOpen(true)}
                 historyStats={localHistoryStats}
                 isHistoryReady={isLocalHistoryReady}
@@ -869,7 +1250,7 @@ export default function Home() {
                 onError={(message) => pushToast("error", message)}
                 onSuccess={(message) => pushToast("success", message)}
               />
-            ) : null}
+            </div>
 
             {activeSection === "research" ? (
               <ResearchSection
@@ -896,7 +1277,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        <span className="app-version" aria-label="当前版本 v1.0.0">v1.0.0</span>
+        <span className="app-version" aria-label="当前版本 v1.0.1">v1.0.1</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}
@@ -990,6 +1371,35 @@ function ResearchSection({
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
+  async function copyMessage(message: ResearchMessage) {
+    try {
+      await navigator.clipboard.writeText(message.content);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = message.content;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => {
+      setCopiedMessageId((current) => (current === message.id ? null : current));
+    }, 1600);
+  }
+
+  function selectMessageText(element: HTMLDivElement) {
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
 
   return (
     <section className="section-surface">
@@ -1008,7 +1418,25 @@ function ResearchSection({
                 {message.role === "assistant" ? <Bot className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
                 <span>{message.role === "assistant" ? "Research AI" : "你"}</span>
               </div>
-              <div className="research-bubble">{message.content}</div>
+              <div className="research-bubble-wrap">
+                <div
+                  className={`research-bubble ${message.role === "assistant" ? "has-copy" : ""}`}
+                  onContextMenu={(event) => selectMessageText(event.currentTarget)}
+                >
+                  {message.content}
+                </div>
+                {message.role === "assistant" ? (
+                  <button
+                    type="button"
+                    className={`research-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
+                    onClick={() => void copyMessage(message)}
+                    title={copiedMessageId === message.id ? "已复制" : "复制全部文本"}
+                    aria-label={copiedMessageId === message.id ? "已复制" : "复制全部文本"}
+                  >
+                    {copiedMessageId === message.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                ) : null}
+              </div>
               {message.sources?.length ? (
                 <div className="research-chip-row research-source-row">
                   {message.sources.map((source) => (
@@ -1216,6 +1644,25 @@ function AuthCodeModal({
       </div>
     </div>
   );
+}
+
+class TerminalImageJobError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TerminalImageJobError";
+  }
+}
+
+function waitForImageJobPoll(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+function sortGenerationResults(results: GenerationResult[]) {
+  return [...results].sort((left, right) => {
+    const leftSequence = Number(left.title.match(/\d+/)?.[0] || Number.MAX_SAFE_INTEGER);
+    const rightSequence = Number(right.title.match(/\d+/)?.[0] || Number.MAX_SAFE_INTEGER);
+    return leftSequence - rightSequence;
+  });
 }
 
 async function readApiResponse<T>(response: Response): Promise<T> {

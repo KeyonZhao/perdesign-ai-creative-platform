@@ -13,7 +13,8 @@ type StoredGenerationSourceImage = Omit<GenerationSourceImage, "dataUrl"> & {
   imageBlob: Blob;
 };
 
-type StoredGenerationMetadata = Omit<GenerationMetadata, "productImage" | "referenceImage"> & {
+type StoredGenerationMetadata = Omit<GenerationMetadata, "sketchImage" | "productImage" | "referenceImage"> & {
+  sketchImage?: StoredGenerationSourceImage;
   productImage?: StoredGenerationSourceImage;
   referenceImage?: StoredGenerationSourceImage;
 };
@@ -101,6 +102,7 @@ export async function getLocalGalleryStats(): Promise<LocalGalleryStats> {
         (sum, batch) =>
           sum +
           batch.results.reduce((batchSum, result) => batchSum + (result.imageBlob?.size || 0), 0) +
+          (batch.metadata?.sketchImage?.imageBlob.size || 0) +
           (batch.metadata?.productImage?.imageBlob.size || 0) +
           (batch.metadata?.referenceImage?.imageBlob.size || 0),
         0
@@ -129,6 +131,7 @@ async function storeBatch(batch: GenerationBatch, createdAt: number): Promise<St
           description: batch.metadata.description,
           innovationLevel: batch.metadata.innovationLevel,
           generationType: batch.metadata.generationType,
+          sketchImage: storeSourceImage(batch.metadata.sketchImage),
           productImage: storeSourceImage(batch.metadata.productImage),
           referenceImage: storeSourceImage(batch.metadata.referenceImage)
         }
@@ -148,9 +151,10 @@ async function restoreBatch(batch: StoredGenerationBatch): Promise<GenerationBat
     metadata: batch.metadata
       ? {
           description: batch.metadata.description,
-          innovationLevel: batch.metadata.innovationLevel,
-          generationType: batch.metadata.generationType,
-          productImage: await restoreSourceImage(batch.metadata.productImage),
+            innovationLevel: batch.metadata.innovationLevel,
+            generationType: batch.metadata.generationType,
+            sketchImage: await restoreSourceImage(batch.metadata.sketchImage),
+            productImage: await restoreSourceImage(batch.metadata.productImage),
           referenceImage: await restoreSourceImage(batch.metadata.referenceImage)
         }
       : undefined,

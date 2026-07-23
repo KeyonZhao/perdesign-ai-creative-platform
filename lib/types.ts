@@ -11,6 +11,8 @@ export type UploadedImage = {
   dataUrl: string;
 };
 
+export type ProductInputMode = "product" | "sketch";
+
 export type ConceptPrompt = {
   title: string;
   prompt: string;
@@ -28,12 +30,13 @@ export type GenerationSourceImage = {
   dataUrl: string;
 };
 
-export type GenerationType = "design" | "multi-view" | "scene" | "local-edit";
+export type GenerationType = "design" | "multi-view" | "scene" | "local-edit" | "image-prompt";
 
 export type GenerationMetadata = {
   description: string;
   innovationLevel: number;
   generationType?: GenerationType;
+  sketchImage?: GenerationSourceImage;
   productImage?: GenerationSourceImage;
   referenceImage?: GenerationSourceImage;
 };
@@ -45,6 +48,16 @@ export type GenerationBatch = {
 };
 
 export type GenerationStatus = "idle" | "optimizing" | "generating" | "success" | "error";
+
+export type CustomCanvasGenerationRequest = {
+  productName: string;
+  sourceImage: UploadedImage;
+  referenceImage: UploadedImage | null;
+  innovationLevel: number;
+  requirement: string;
+  count: number;
+  size: string;
+};
 
 export type ToastMessage = {
   id: string;

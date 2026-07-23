@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { callImageEdit, callImageGeneration, failedResult, mapWithConcurrency } from "@/lib/aihubmix";
-import { makeId } from "@/lib/utils";
+import { submitAsyncImageEdit, submitAsyncImageGeneration } from "@/lib/aihubmix";
+import { resolveProviderConfig } from "@/lib/provider";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 const BRAIN_MODEL = "gpt-5.5";
 
 const requestSchema = z.object({
@@ -14,11 +14,15 @@ const requestSchema = z.object({
   chatApiBaseUrl: z.string().optional().default(""),
   brainModel: z.string().min(1).optional().default(BRAIN_MODEL),
   imageModel: z.string().min(1, "请选择生图模型。"),
+  productName: z.string().trim().max(100, "产品名称不能超过100个字符。").optional().default(""),
+  sketchImageBase64: z.string().startsWith("data:image/").optional(),
   imageBase64: z.string().startsWith("data:image/").optional(),
   maskImageBase64: z.string().startsWith("data:image/").optional(),
+  localEditGuideImageBase64: z.string().startsWith("data:image/").optional(),
   referenceImageBase64: z.string().startsWith("data:image/").optional(),
   innovationLevel: z.number().int().min(0).max(100).optional().default(50),
   requirement: z.string().optional().default(""),
+  useExactPrompt: z.boolean().optional().default(false),
   count: z.number().int().min(1).max(10),
   size: z.string().min(1),
   quality: z.string().min(1)
@@ -26,87 +30,118 @@ const requestSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = requestSchema.parse(await request.json());
-    if (!payload.imageBase64 && !payload.referenceImageBase64 && !payload.requirement.trim()) {
-      throw new Error("请至少输入提示词，或上传产品图 / 参考图后再生成。");
+    const requestPayload = requestSchema.parse(await request.json());
+    const provider = resolveProviderConfig({
+      apiKey: requestPayload.imageApiKey,
+      baseUrl: requestPayload.imageApiBaseUrl
+    }, "image");
+    const payload = {
+      ...requestPayload,
+      imageApiKey: provider.apiKey,
+      imageApiBaseUrl: provider.baseUrl
+    };
+    if (!payload.sketchImageBase64 && !payload.imageBase64 && !payload.referenceImageBase64 && !payload.requirement.trim() && !payload.productName) {
+      throw new Error("请先填写产品名称，或提供可用于生成的图片和文字。");
     }
+    const hasSketchImage = Boolean(payload.sketchImageBase64);
     const hasReferenceImage = Boolean(payload.referenceImageBase64);
-    const concepts = buildDirectConcepts(payload.requirement, payload.count, Boolean(payload.imageBase64));
+    const concept = buildDirectConcepts(
+      payload.productName,
+      payload.requirement,
+      1,
+      Boolean(payload.sketchImageBase64 || payload.imageBase64),
+      payload.useExactPrompt
+    )[0];
 
-    const results = await mapWithConcurrency(concepts, 2, async (concept, index) => {
-      try {
-        const imageBase64 = await generateConceptImage({
-          payload,
-          conceptPrompt: concept.prompt,
-          hasReferenceImage
-        });
-
-        return {
-          id: makeId(`concept-${index}`),
-          title: concept.title,
-          prompt: concept.prompt,
-          imageBase64
-        };
-      } catch (error) {
-        console.error("[generate] concept failed", {
-          index,
-          title: concept.title,
-          hasProductImage: Boolean(payload.imageBase64),
-          hasReferenceImage: Boolean(payload.referenceImageBase64),
-          imageModel: payload.imageModel,
-          message: error instanceof Error ? error.message : String(error)
-        });
-        return failedResult(concept, error, index);
-      }
+    const submission = await submitConceptImage({
+      payload,
+      conceptPrompt: concept.prompt,
+      hasSketchImage,
+      hasReferenceImage
     });
 
-    return NextResponse.json({ results });
+    return NextResponse.json(
+      {
+        jobId: submission.jobId,
+        status: submission.status,
+        prompt: concept.prompt,
+        title: concept.title
+      },
+      { status: 202 }
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "生成失败，请检查配置后重试。";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 
-async function generateConceptImage({
+async function submitConceptImage({
   payload,
   conceptPrompt,
+  hasSketchImage,
   hasReferenceImage
 }: {
   payload: z.infer<typeof requestSchema>;
   conceptPrompt: string;
+  hasSketchImage: boolean;
   hasReferenceImage: boolean;
 }) {
-  if (payload.imageBase64 || payload.referenceImageBase64) {
-    return callImageEdit({
+  if (payload.sketchImageBase64 || payload.imageBase64 || payload.referenceImageBase64) {
+    return submitAsyncImageEdit({
       baseUrl: payload.imageApiBaseUrl,
       apiKey: payload.imageApiKey,
       imageModel: payload.imageModel,
-      inputImages: [payload.imageBase64, payload.referenceImageBase64].filter((item): item is string => Boolean(item)),
+      inputImages: [payload.sketchImageBase64, payload.imageBase64, payload.localEditGuideImageBase64, payload.referenceImageBase64].filter((item): item is string => Boolean(item)),
       maskImage: payload.maskImageBase64,
+      hasLocalEditGuide: Boolean(payload.localEditGuideImageBase64),
       prompt: conceptPrompt,
+      hasSketchImage,
       hasProductImage: Boolean(payload.imageBase64),
       innovationLevel: payload.innovationLevel,
       hasReference: hasReferenceImage,
+      useExactPrompt: payload.useExactPrompt,
       size: payload.size,
       quality: payload.quality
     });
   }
 
-  return callImageGeneration({
+  return submitAsyncImageGeneration({
     baseUrl: payload.imageApiBaseUrl,
     apiKey: payload.imageApiKey,
     imageModel: payload.imageModel,
     prompt: conceptPrompt,
     innovationLevel: payload.innovationLevel,
+    useExactPrompt: payload.useExactPrompt,
     size: payload.size,
     quality: payload.quality
   });
 }
 
-function buildDirectConcepts(requirement: string, count: number, hasProductImage: boolean) {
-  const basePrompt = requirement.trim() || (hasProductImage
-    ? "Create a refined, manufacturable industrial design variation with premium CMF, realistic rendering, and a clean background."
-    : "Create a premium industrial design product concept, realistic rendering, clean background, strong CMF detailing.");
+function buildDirectConcepts(
+  productName: string,
+  requirement: string,
+  count: number,
+  hasProductImage: boolean,
+  useExactPrompt: boolean
+) {
+  const targetProduct = productName.trim();
+  const userRequirement = requirement.trim();
+  if (useExactPrompt) {
+    if (!userRequirement) throw new Error("请输入文字描述。");
+    return Array.from({ length: count }, (_, index) => ({
+      title: `Concept ${String(index + 1).padStart(2, "0")}`,
+      prompt: userRequirement
+    }));
+  }
+  const productConstraint = targetProduct
+    ? `最终生成主体必须是“${targetProduct}”，不得替换为其他产品品类。`
+    : "";
+  const taskConstraint = userRequirement
+    ? `用户文字描述（保持原意并完整执行）：${userRequirement}`
+    : hasProductImage
+      ? "在保留主体产品必要结构、比例和使用关系的基础上，生成高完成度、可量产的工业设计方案，使用真实材质与干净背景。"
+      : "生成高完成度、可量产的工业产品设计方案，明确合理结构、CMF、真实材质与干净背景。";
+  const basePrompt = [productConstraint, taskConstraint].filter(Boolean).join("\n");
 
   return Array.from({ length: count }, (_, index) => ({
     title: `Concept ${String(index + 1).padStart(2, "0")}`,

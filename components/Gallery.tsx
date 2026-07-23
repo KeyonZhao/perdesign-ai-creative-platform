@@ -1,15 +1,18 @@
 "use client";
 
-import { HardDrive, Images, Package, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { HardDrive, Package, Plus, SlidersHorizontal } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LocalGalleryStats } from "@/lib/local-gallery";
-import type { GenerationBatch, GenerationMetadata, GenerationResult, GenerationStatus } from "@/lib/types";
+import { getGalleryDraggedImage } from "@/lib/image";
+import type { CustomCanvasGenerationRequest, GenerationBatch, GenerationMetadata, GenerationResult, GenerationStatus, UploadedImage } from "@/lib/types";
 import { downloadResultsZip } from "@/lib/zip";
+import { CustomCanvasEditorModal } from "./CustomCanvasEditorModal";
 import { ImagePreviewModal } from "./ImagePreviewModal";
 import { LocalHistoryModal } from "./LocalHistoryModal";
 import { ResultCard } from "./ResultCard";
 
 type GalleryProps = {
+  isActive: boolean;
   isGeneratingVariant?: boolean;
   status: GenerationStatus;
   batches: GenerationBatch[];
@@ -17,9 +20,18 @@ type GalleryProps = {
   count: number;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
+  onGenerateFromPrompt: (result: GenerationResult, instruction: string) => void;
   onGenerateDesignDescription: (result: GenerationResult) => Promise<string>;
   designDescriptionLoadingIds: string[];
-  onLocalEdit: (result: GenerationResult, maskImageBase64: string, instruction: string) => void;
+  onLocalEdit: (
+    result: GenerationResult,
+    maskImageBase64: string,
+    instruction: string,
+    guideImageBase64?: string
+  ) => void;
+  onGenerateCustom: (request: CustomCanvasGenerationRequest) => boolean;
+  onOptimizeCustom: (request: CustomCanvasGenerationRequest) => Promise<string>;
+  hasChatConfig: boolean;
   onOpenSettings: () => void;
   historyStats: LocalGalleryStats | null;
   isHistoryReady: boolean;
@@ -32,6 +44,7 @@ type GalleryProps = {
 };
 
 export function Gallery({
+  isActive,
   status,
   batches,
   activeBatchId,
@@ -40,9 +53,13 @@ export function Gallery({
   onSuccess,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateFromPrompt,
   onGenerateDesignDescription,
   designDescriptionLoadingIds,
   onLocalEdit,
+  onGenerateCustom,
+  onOptimizeCustom,
+  hasChatConfig,
   onOpenSettings,
   historyStats,
   isHistoryReady,
@@ -56,10 +73,15 @@ export function Gallery({
   const [previewMetadata, setPreviewMetadata] = useState<GenerationMetadata | null>(null);
   const [previewStartsEditing, setPreviewStartsEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [customEditorOpen, setCustomEditorOpen] = useState(false);
+  const [customSourceImage, setCustomSourceImage] = useState<UploadedImage | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   const activeBatchRef = useRef<HTMLDivElement | null>(null);
   const pendingBatchRef = useRef<HTMLDivElement | null>(null);
+  const hasPositionedGalleryRef = useRef(false);
+  const wasActiveRef = useRef(false);
   const allResults = useMemo(() => batches.flatMap((batch) => batch.results), [batches]);
+  const isGenerating = status === "generating";
 
   useEffect(() => {
     if (!preview) return;
@@ -76,19 +98,37 @@ export function Gallery({
     }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!isActive) {
+      wasActiveRef.current = false;
+      return;
+    }
+
+    if (hasPositionedGalleryRef.current && !wasActiveRef.current) {
+      wasActiveRef.current = true;
+      return;
+    }
+    wasActiveRef.current = true;
+
     const scrollArea = scrollAreaRef.current;
-    const target = status === "generating" ? pendingBatchRef.current : activeBatchRef.current;
+    const target = isGenerating ? pendingBatchRef.current : activeBatchRef.current;
     if (!scrollArea || !target) return;
 
     const targetTop = target.offsetTop - 20;
+    const top = Math.max(0, targetTop);
+    if (!hasPositionedGalleryRef.current) {
+      scrollArea.scrollTop = top;
+      hasPositionedGalleryRef.current = true;
+      return;
+    }
+
     scrollArea.scrollTo({
-      top: Math.max(0, targetTop),
+      top,
       behavior: "smooth"
     });
-  }, [activeBatchId, status]);
+  }, [activeBatchId, allResults.length, count, isActive, isGenerating]);
 
-  const hasResults = batches.length > 0;
+  const hasResults = allResults.length > 0;
 
   return (
     <section className="content-panel flex min-h-0 flex-1 flex-col">
@@ -176,19 +216,38 @@ export function Gallery({
                     </div>
                   ))
                 : null}
+              <CustomCanvasTile
+                onClick={() => {
+                  setCustomSourceImage(null);
+                  setCustomEditorOpen(true);
+                }}
+                onDropImage={(image) => {
+                  setCustomSourceImage(image);
+                  setCustomEditorOpen(true);
+                }}
+                onError={onError}
+              />
                   </div>
           </div>
         ) : (
-          <div className="gallery-empty-state">
-            <div className="text-center">
-              <div className="content-card mx-auto flex h-16 w-16 items-center justify-center">
-                {isHistoryReady ? <Images className="h-7 w-7 text-violet-100" /> : <HardDrive className="h-7 w-7 animate-pulse text-violet-100" />}
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+            {isHistoryReady ? (
+              <CustomCanvasTile
+                onClick={() => {
+                  setCustomSourceImage(null);
+                  setCustomEditorOpen(true);
+                }}
+                onDropImage={(image) => {
+                  setCustomSourceImage(image);
+                  setCustomEditorOpen(true);
+                }}
+                onError={onError}
+              />
+            ) : (
+              <div className="content-card gallery-batch flex aspect-square items-center justify-center">
+                <HardDrive className="h-7 w-7 animate-pulse text-violet-100" />
               </div>
-              <h2 className="mt-5 text-xl font-semibold text-white">{isHistoryReady ? "等待生成创意方案" : "正在恢复本地作品"}</h2>
-              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-400">
-                {isHistoryReady ? "输入提示词即可生成，也可以额外上传产品图或参考图，提升方案控制感。" : "历史图片保存在当前设备，恢复完成后会自动出现在画廊中。"}
-              </p>
-            </div>
+            )}
           </div>
         )}
           </div>
@@ -216,10 +275,16 @@ export function Gallery({
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
         }}
+        onGenerateFromPrompt={(result, instruction) => {
+          onGenerateFromPrompt(result, instruction);
+          setPreview(null);
+          setPreviewMetadata(null);
+          setPreviewStartsEditing(false);
+        }}
         onGenerateDesignDescription={onGenerateDesignDescription}
         isGeneratingDesignDescription={Boolean(preview && designDescriptionLoadingIds.includes(preview.id))}
-        onLocalEdit={(result, maskImageBase64, instruction) => {
-          onLocalEdit(result, maskImageBase64, instruction);
+        onLocalEdit={(result, maskImageBase64, instruction, guideImageBase64) => {
+          onLocalEdit(result, maskImageBase64, instruction, guideImageBase64);
           setPreview(null);
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
@@ -236,6 +301,143 @@ export function Gallery({
         onImport={onImportProject}
         onClear={onClearHistory}
       />
+      {customEditorOpen ? (
+        <CustomCanvasEditorModal
+          initialSourceImage={customSourceImage}
+          status={status}
+          hasChatConfig={hasChatConfig}
+          onClose={() => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+          }}
+          onGenerate={onGenerateCustom}
+          onOptimize={onOptimizeCustom}
+          onOpenLocalEdit={(request) => {
+            setCustomEditorOpen(false);
+            setPreviewStartsEditing(true);
+            setPreviewMetadata(createCustomMetadata(request));
+            setPreview(createCustomResult(request));
+          }}
+          onGenerateMultiView={(request) => {
+            setCustomEditorOpen(false);
+            onGenerateMultiView(createCustomResult(request));
+          }}
+          onGenerateScene={(request) => {
+            setCustomEditorOpen(false);
+            onGenerateScene(createCustomResult(request));
+          }}
+          onError={onError}
+          onSuccess={onSuccess}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function createCustomResult(request: CustomCanvasGenerationRequest): GenerationResult {
+  return {
+    id: `custom-canvas-${Date.now()}`,
+    title: request.productName || "上传图片",
+    prompt: request.requirement,
+    imageBase64: request.sourceImage.dataUrl
+  };
+}
+
+function createCustomMetadata(request: CustomCanvasGenerationRequest): GenerationMetadata {
+  return {
+    description: request.requirement,
+    innovationLevel: request.innovationLevel,
+    generationType: "design",
+    productImage: {
+      name: request.sourceImage.name,
+      dataUrl: request.sourceImage.dataUrl
+    },
+    referenceImage: request.referenceImage
+      ? {
+          name: request.referenceImage.name,
+          dataUrl: request.referenceImage.dataUrl
+        }
+      : undefined
+  };
+}
+
+function CustomCanvasTile({
+  onClick,
+  onDropImage,
+  onError
+}: {
+  onClick: () => void;
+  onDropImage: (image: UploadedImage) => void;
+  onError: (message: string) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+
+  async function handleDroppedFile(file?: File) {
+    if (!file) {
+      onError("没有读取到图片，请重新拖入。");
+      return;
+    }
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      onError("请拖入 PNG、JPG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      onError("图片不能超过 10MB。");
+      return;
+    }
+
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("图片读取失败，请重试。"));
+        reader.readAsDataURL(file);
+      });
+      onDropImage({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        dataUrl
+      });
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "图片读取失败，请重试。");
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className={`custom-canvas-tile ${dragging ? "dragging" : ""}`}
+      onClick={onClick}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) setDragging(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setDragging(false);
+        const galleryImage = getGalleryDraggedImage(event.dataTransfer);
+        if (galleryImage) {
+          onDropImage(galleryImage);
+          return;
+        }
+        void handleDroppedFile(event.dataTransfer.files[0]);
+      }}
+      aria-label="打开自定义图片编辑"
+    >
+      <span><Plus className="h-7 w-7" /></span>
+      <strong>空画布</strong>
+      <small>上传图片并继续编辑</small>
+    </button>
   );
 }

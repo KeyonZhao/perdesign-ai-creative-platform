@@ -3,7 +3,7 @@ import type { ModelOption, QualityOption, SizeOption } from "./types";
 export const brainModels: ModelOption[] = [
   { label: "GPT-4o Mini", value: "gpt-4o-mini" },
   { label: "GPT-4o", value: "gpt-4o" },
-  { label: "GPT-5.5", value: "gpt-5.5" },
+  { label: "GPT-5", value: "gpt-5" },
   { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro" },
   { label: "Gemini 2.5 Flash", value: "gemini-2.5-flash" },
   { label: "Claude Sonnet 4", value: "claude-sonnet-4" }

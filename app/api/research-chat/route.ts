@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { resolveProviderConfig } from "@/lib/provider";
 import { generateResearchReply } from "@/lib/research";
 
 const messageSchema = z.object({
@@ -17,7 +18,11 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
-    const result = await generateResearchReply(payload);
+    const provider = resolveProviderConfig(payload, "chat");
+    const result = await generateResearchReply({
+      ...payload,
+      ...provider
+    });
     return NextResponse.json(result);
   } catch (error) {
     console.error("[research-chat] request failed", error);

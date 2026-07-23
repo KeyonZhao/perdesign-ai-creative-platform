@@ -14,7 +14,8 @@ type BackupSourceImage = Omit<GenerationSourceImage, "dataUrl"> & {
   imageMime: string;
 };
 
-type BackupMetadata = Omit<GenerationMetadata, "productImage" | "referenceImage"> & {
+type BackupMetadata = Omit<GenerationMetadata, "sketchImage" | "productImage" | "referenceImage"> & {
+  sketchImage?: BackupSourceImage;
   productImage?: BackupSourceImage;
   referenceImage?: BackupSourceImage;
 };
@@ -42,7 +43,7 @@ export async function exportPerdesignProject(batches: GenerationBatch[]) {
     exportedAt: new Date().toISOString(),
     batches: batches.map((batch, batchIndex) => {
       const batchNumber = String(batchIndex + 1).padStart(3, "0");
-      const storeInputImage = (image: GenerationSourceImage | undefined, role: "product" | "reference") => {
+      const storeInputImage = (image: GenerationSourceImage | undefined, role: "sketch" | "product" | "reference") => {
         if (!image?.dataUrl) return undefined;
         const mime = getDataUrlMime(image.dataUrl);
         const filename = `batch-${batchNumber}-${role}.${getImageExtension(mime)}`;
@@ -57,6 +58,7 @@ export async function exportPerdesignProject(batches: GenerationBatch[]) {
               description: batch.metadata.description,
               innovationLevel: batch.metadata.innovationLevel,
               generationType: batch.metadata.generationType,
+              sketchImage: storeInputImage(batch.metadata.sketchImage, "sketch"),
               productImage: storeInputImage(batch.metadata.productImage, "product"),
               referenceImage: storeInputImage(batch.metadata.referenceImage, "reference")
             }
@@ -107,6 +109,7 @@ export async function importPerdesignProject(file: File): Promise<GenerationBatc
             description: String(batch.metadata.description || ""),
             innovationLevel: Number(batch.metadata.innovationLevel ?? 50),
             generationType: batch.metadata.generationType,
+            sketchImage: await restoreBackupSourceImage(zip, batch.metadata.sketchImage),
             productImage: await restoreBackupSourceImage(zip, batch.metadata.productImage),
             referenceImage: await restoreBackupSourceImage(zip, batch.metadata.referenceImage)
           }

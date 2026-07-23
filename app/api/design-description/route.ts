@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { callChatCompletion } from "@/lib/aihubmix";
+import { resolveProviderConfig } from "@/lib/provider";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -27,9 +28,10 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
+    const provider = resolveProviderConfig(payload, "chat");
     const description = await callChatCompletion({
-      baseUrl: payload.baseUrl,
-      apiKey: payload.apiKey,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
       model: payload.model,
       temperature: 0.45,
       messages: [

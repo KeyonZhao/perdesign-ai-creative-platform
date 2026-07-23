@@ -3,9 +3,9 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ImagePlus, Trash2, UploadCloud, X } from "lucide-react";
-import type { UploadedImage } from "@/lib/types";
-import { formatBytes } from "@/lib/image";
+import { Image as ImageIcon, ImagePlus, PenLine, Trash2, UploadCloud, X } from "lucide-react";
+import type { ProductInputMode, UploadedImage } from "@/lib/types";
+import { formatBytes, getGalleryDraggedImage } from "@/lib/image";
 
 const MAX_SIZE = 10 * 1024 * 1024;
 const ACCEPTED = ["image/png", "image/jpeg", "image/webp"];
@@ -18,6 +18,8 @@ type ImageUploaderProps = {
   emptyTitle?: string;
   helperText?: string;
   imageAlt?: string;
+  inputMode?: ProductInputMode;
+  onInputModeChange?: (mode: ProductInputMode) => void;
 };
 
 export function ImageUploader({
@@ -27,7 +29,9 @@ export function ImageUploader({
   title = "产品图",
   emptyTitle = "拖入产品图，开始变款重构",
   helperText = "支持 PNG / JPG / WebP，建议上传清晰产品渲染图或实拍图",
-  imageAlt = "上传的图片"
+  imageAlt = "上传的图片",
+  inputMode,
+  onInputModeChange
 }: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -85,11 +89,16 @@ export function ImageUploader({
     onDrop: (event: React.DragEvent) => {
       event.preventDefault();
       setDragging(false);
+      const galleryImage = getGalleryDraggedImage(event.dataTransfer);
+      if (galleryImage) {
+        onChange(galleryImage);
+        return;
+      }
       void handleFile(event.dataTransfer.files[0]);
     }
   };
 
-  const uploadSurfaceClass = `w-full overflow-hidden rounded-[18px] border p-4 text-left transition ${
+  const uploadSurfaceClass = `w-full overflow-hidden rounded-[18px] border text-left transition ${
     dragging || pasteTargetActive
       ? "border-white/[0.08] bg-white/[0.04]"
       : "border-white/10 bg-[#18181a] hover:border-white/20 hover:bg-[#1d1d20]"
@@ -111,44 +120,77 @@ export function ImageUploader({
         ) : null}
       </div>
 
-      {value ? (
-        <div className={uploadSurfaceClass} {...interactionProps}>
-          <div className="flex gap-3">
-            <button
-              type="button"
-              className="group relative h-20 w-20 shrink-0 overflow-hidden rounded-xl outline-none ring-violet-400/60 focus-visible:ring-2"
-              onClick={() => setPreviewOpen(true)}
-              aria-label={`预览${title}`}
-              title={`预览${title}`}
-            >
-              <img src={value.dataUrl} alt={imageAlt} className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.04]" />
-              <span className="absolute inset-0 bg-black/0 transition group-hover:bg-black/10" />
-            </button>
-            <button
-              type="button"
-              className="min-w-0 flex-1 self-stretch rounded-xl px-3 text-left outline-none transition hover:bg-white/[0.045] focus-visible:bg-white/[0.045] focus-visible:ring-2 focus-visible:ring-violet-400/50"
-              onClick={() => inputRef.current?.click()}
-              aria-label={`重新上传${title}：${value.name}`}
-              title={`重新上传${title}`}
-            >
-              <p className="truncate text-sm font-medium text-white">{value.name}</p>
-              <p className="mt-1 text-xs text-zinc-500">{formatBytes(value.size)}</p>
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button type="button" onClick={() => inputRef.current?.click()} className={uploadSurfaceClass} {...interactionProps}>
-          <div className="flex gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-white/10 bg-[#222226]">
-              {title.includes("参考") ? <ImagePlus className="h-5 w-5 text-violet-200" /> : <UploadCloud className="h-5 w-5 text-violet-200" />}
-            </div>
-            <div>
-              <p className="text-sm font-medium text-white">{emptyTitle}</p>
-              <p className="mt-1 text-xs leading-5 text-zinc-500">{helperText}</p>
+      <div className={uploadSurfaceClass} {...interactionProps}>
+        {inputMode && onInputModeChange ? (
+          <div className="flex justify-center px-4 pt-3.5">
+            <div className="inline-grid grid-cols-2 gap-0.5 rounded-[10px] border border-white/[0.07] bg-black/20 p-1" role="group" aria-label="产品图类型">
+              <button
+                type="button"
+                className={`flex h-7 items-center justify-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] font-medium transition ${inputMode === "product" ? "border-violet-400/35 bg-white/[0.075] text-white shadow-[0_0_12px_rgba(111,76,255,0.13),inset_-1px_0_0_rgba(139,108,255,0.42)]" : value ? "cursor-not-allowed border-transparent text-zinc-700" : "border-transparent text-zinc-500 hover:bg-white/[0.045] hover:text-zinc-300"}`}
+                onClick={() => onInputModeChange("product")}
+                aria-pressed={inputMode === "product"}
+                disabled={Boolean(value && inputMode !== "product")}
+              >
+                <ImageIcon className={`h-3.5 w-3.5 ${inputMode === "product" ? "text-violet-200" : ""}`} />
+                产品原图
+              </button>
+              <button
+                type="button"
+                className={`flex h-7 items-center justify-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] font-medium transition ${inputMode === "sketch" ? "border-violet-400/35 bg-white/[0.075] text-white shadow-[0_0_12px_rgba(111,76,255,0.13),inset_-1px_0_0_rgba(139,108,255,0.42)]" : value ? "cursor-not-allowed border-transparent text-zinc-700" : "border-transparent text-zinc-500 hover:bg-white/[0.045] hover:text-zinc-300"}`}
+                onClick={() => onInputModeChange("sketch")}
+                aria-pressed={inputMode === "sketch"}
+                disabled={Boolean(value && inputMode !== "sketch")}
+              >
+                <PenLine className={`h-3.5 w-3.5 ${inputMode === "sketch" ? "text-violet-200" : ""}`} />
+                设计草图
+              </button>
             </div>
           </div>
-        </button>
-      )}
+        ) : null}
+
+        {value ? (
+          <div className={`p-4 ${inputMode ? "pt-3" : ""}`}>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="group relative h-20 w-20 shrink-0 overflow-hidden rounded-xl outline-none ring-violet-400/60 focus-visible:ring-2"
+                onClick={() => setPreviewOpen(true)}
+                aria-label={`预览${title}`}
+                title={`预览${title}`}
+              >
+                <img src={value.dataUrl} alt={imageAlt} className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.04]" />
+                <span className="absolute inset-0 bg-black/0 transition group-hover:bg-black/10" />
+              </button>
+              <button
+                type="button"
+                className="min-w-0 flex-1 self-stretch rounded-xl px-3 text-left outline-none transition hover:bg-white/[0.045] focus-visible:bg-white/[0.045] focus-visible:ring-2 focus-visible:ring-violet-400/50"
+                onClick={() => inputRef.current?.click()}
+                aria-label={`重新上传${title}：${value.name}`}
+                title={`重新上传${title}`}
+              >
+                <p className="truncate text-sm font-medium text-white">{value.name}</p>
+                <p className="mt-1 text-xs text-zinc-500">{formatBytes(value.size)}</p>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className={`w-full p-4 text-left outline-none transition hover:bg-white/[0.025] focus-visible:bg-white/[0.035] ${inputMode ? "pt-3" : ""}`}
+          >
+            <div className="flex gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-white/10 bg-[#222226]">
+                {title.includes("参考") ? <ImagePlus className="h-5 w-5 text-violet-200" /> : <UploadCloud className="h-5 w-5 text-violet-200" />}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-white">{emptyTitle}</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">{helperText}</p>
+              </div>
+            </div>
+          </button>
+        )}
+      </div>
 
       <input
         ref={inputRef}
