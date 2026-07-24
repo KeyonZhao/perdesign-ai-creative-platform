@@ -30,6 +30,7 @@ import {
 } from "@/lib/local-gallery";
 import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
 import { convertImageDataUrlToPng, prepareImageForVision } from "@/lib/image";
+import { buildCreativeDivergencePrompt } from "@/lib/creative-divergence";
 import {
   addPendingImageJob,
   loadPendingImageJobs,
@@ -37,6 +38,7 @@ import {
   type PendingImageJob
 } from "@/lib/pending-image-jobs";
 import type {
+  CreativeDivergenceRequest,
   CustomCanvasGenerationRequest,
   GenerationBatch,
   GenerationResult,
@@ -85,7 +87,8 @@ type PendingAuthAction =
   | { type: "research" }
   | { type: "multi-view"; result: GenerationResult }
   | { type: "scene"; result: GenerationResult }
-  | { type: "image-prompt"; result: GenerationResult; instruction: string }
+  | { type: "divergence"; result: GenerationResult; productName?: string; request: CreativeDivergenceRequest }
+  | { type: "image-prompt"; result: GenerationResult; instruction: string; referenceImages?: GenerationSourceImage[] }
   | { type: "local-edit"; result: GenerationResult; maskImageBase64: string; instruction: string; guideImageBase64?: string }
   | { type: "custom-generate"; request: CustomCanvasGenerationRequest }
   | null;
@@ -137,7 +140,7 @@ export default function Home() {
   const [quality, setQuality] = usePersistedState(storageKeys.quality, "high");
   const [productInputMode, setProductInputMode] = useState<ProductInputMode>("product");
   const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
-  const [referenceImage, setReferenceImage] = useState<UploadedImage | null>(null);
+  const [referenceImages, setReferenceImages] = useState<UploadedImage[]>([]);
   const [innovationLevel, setInnovationLevel] = usePersistedNumber(storageKeys.innovationLevel, 50);
   const [promptBeforeOptimization, setPromptBeforeOptimization] = useState<string | null>(null);
   const [authDraft, setAuthDraft] = useState("");
@@ -175,7 +178,7 @@ export default function Home() {
     productName.trim() ||
     requirement.trim() ||
     uploadedImage ||
-    referenceImage
+    referenceImages.length
   );
 
   useEffect(() => {
@@ -507,8 +510,11 @@ export default function Home() {
       case "scene":
         void generateSceneCore(action.result, forceAuthorized);
         break;
+      case "divergence":
+        void generateDivergenceCore(action.result, action.productName, action.request, forceAuthorized);
+        break;
       case "image-prompt":
-        void generateFromImagePromptCore(action.result, action.instruction, forceAuthorized);
+        void generateFromImagePromptCore(action.result, action.instruction, action.referenceImages, forceAuthorized);
         break;
       case "local-edit":
         void generateLocalEditCore(action.result, action.maskImageBase64, action.instruction, action.guideImageBase64, forceAuthorized);
@@ -571,15 +577,15 @@ export default function Home() {
     const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
     if (!unlocked) return openAuthModal();
     if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
-    if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImage) {
+    if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImages.length) {
       return pushToast("error", "请填写文字描述，或上传可用于撰写提示词的图片。");
     }
 
     setStatus("optimizing");
     try {
-      const [subjectImageForOptimization, referenceImageForOptimization] = await Promise.all([
+      const [subjectImageForOptimization, referenceImagesForOptimization] = await Promise.all([
         uploadedImage ? prepareImageForVision(uploadedImage.dataUrl, 1600, 0.82) : Promise.resolve(undefined),
-        referenceImage ? prepareImageForVision(referenceImage.dataUrl, 1600, 0.82) : Promise.resolve(undefined)
+        Promise.all(referenceImages.map((image) => prepareImageForVision(image.dataUrl, 1600, 0.82)))
       ]);
       const response = await fetch("/api/optimize-prompt", {
         method: "POST",
@@ -592,7 +598,7 @@ export default function Home() {
           userPrompt: requirement,
           productImageBase64: productInputMode === "product" ? subjectImageForOptimization : undefined,
           sketchImageBase64: productInputMode === "sketch" ? subjectImageForOptimization : undefined,
-          referenceImageBase64: referenceImageForOptimization,
+          referenceImageBase64s: referenceImagesForOptimization,
           innovationLevel
         })
       });
@@ -662,7 +668,7 @@ export default function Home() {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
-    if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImage) {
+    if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImages.length) {
       return pushToast("error", "请填写文字描述，或上传可用于生成的图片。");
     }
 
@@ -670,7 +676,7 @@ export default function Home() {
       productName: productName.trim(),
       sketchImage: productInputMode === "sketch" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
       productImage: productInputMode === "product" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
-      referenceImage: referenceImage ? { name: referenceImage.name, dataUrl: referenceImage.dataUrl } : undefined,
+      referenceImages: referenceImages.map((image) => ({ name: image.name, dataUrl: image.dataUrl })),
       innovationLevel,
       requirement,
       count
@@ -717,10 +723,12 @@ export default function Home() {
     sketchImage?: GenerationSourceImage;
     productImage?: GenerationSourceImage;
     referenceImage?: GenerationSourceImage;
+    referenceImages?: GenerationSourceImage[];
     innovationLevel: number;
     requirement: string;
     count: number;
     generationType?: GenerationType;
+    divergenceStyles?: string[];
     metadataDescription?: string;
     sizeOverride?: string;
     maskImageBase64?: string;
@@ -735,12 +743,15 @@ export default function Home() {
       id: batchId,
       results: [],
       metadata: {
+        productName: params.productName,
         description: params.metadataDescription ?? params.requirement,
         innovationLevel: params.innovationLevel,
         generationType: params.generationType || "design",
+        divergenceStyles: params.divergenceStyles,
         sketchImage: params.sketchImage,
         productImage: params.productImage,
-        referenceImage: params.referenceImage
+        referenceImage: params.referenceImage,
+        referenceImages: params.referenceImages
       }
     };
     const batchesWithProgressiveBatch = [...existingBatches, progressiveBatch];
@@ -775,6 +786,7 @@ export default function Home() {
             maskImageBase64: params.maskImageBase64,
             localEditGuideImageBase64: params.localEditGuideImageBase64,
             referenceImageBase64: params.referenceImage?.dataUrl,
+            referenceImageBase64s: params.referenceImages?.map((image) => image.dataUrl),
             innovationLevel: params.innovationLevel,
             requirement: params.requirement,
             useExactPrompt: params.useExactPrompt,
@@ -920,16 +932,78 @@ export default function Home() {
     }, forceAuthorized);
   }
 
-  async function generateFromImagePrompt(result: GenerationResult, instruction: string) {
+  async function generateDivergence(
+    result: GenerationResult,
+    sourceProductName: string | undefined,
+    request: CreativeDivergenceRequest
+  ) {
+    const selectedStyleCount = new Set(request.styleIds || []).size;
+    if (selectedStyleCount > 4) {
+      return pushToast("error", "最多选择 4 种创意风格。");
+    }
+    if (Boolean(selectedStyleCount) === Boolean(request.referenceImage)) {
+      return pushToast("error", "请选择 1 至 4 种创意风格，或上传一张风格参考图。");
+    }
+    if (!ensureAuthorized({ type: "divergence", result, productName: sourceProductName, request })) return;
+    await generateDivergenceCore(result, sourceProductName, request);
+  }
+
+  async function generateDivergenceCore(
+    result: GenerationResult,
+    sourceProductName?: string,
+    request: CreativeDivergenceRequest = {},
+    forceAuthorized = false
+  ) {
+    const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
+    if (!unlocked) return;
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
+      return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    }
+    if (!result.imageBase64) return pushToast("error", "当前图片不可用于创意发散。");
+
+    const resolvedProductName = sourceProductName?.trim() || productName.trim();
+    let exactPrompt: string;
+    let divergenceStyles: string[];
+    try {
+      const preparedDivergence = buildCreativeDivergencePrompt({
+        productName: resolvedProductName,
+        request
+      });
+      exactPrompt = preparedDivergence.prompt;
+      divergenceStyles = preparedDivergence.quadrantStyleLabels;
+    } catch (error) {
+      return pushToast("error", error instanceof Error ? error.message : "创意发散参数无效。");
+    }
+
+    await runGeneration({
+      productName: resolvedProductName,
+      productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
+      referenceImages: request.referenceImage ? [request.referenceImage] : undefined,
+      innovationLevel: 100,
+      requirement: exactPrompt,
+      count: 1,
+      generationType: "divergence",
+      divergenceStyles,
+      sizeOverride: "1536x1024",
+      useExactPrompt: true
+    }, forceAuthorized);
+  }
+
+  async function generateFromImagePrompt(
+    result: GenerationResult,
+    instruction: string,
+    referenceImages?: GenerationSourceImage[]
+  ) {
     const trimmedInstruction = instruction.trim();
     if (!trimmedInstruction) return pushToast("error", "请输入文字描述。");
-    if (!ensureAuthorized({ type: "image-prompt", result, instruction: trimmedInstruction })) return;
-    await generateFromImagePromptCore(result, trimmedInstruction);
+    if (!ensureAuthorized({ type: "image-prompt", result, instruction: trimmedInstruction, referenceImages })) return;
+    await generateFromImagePromptCore(result, trimmedInstruction, referenceImages);
   }
 
   async function generateFromImagePromptCore(
     result: GenerationResult,
     instruction: string,
+    referenceImages?: GenerationSourceImage[],
     forceAuthorized = false
   ) {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } =
@@ -945,6 +1019,7 @@ export default function Home() {
     await runGeneration(
       {
         productImage: { name: `${result.title}.png`, dataUrl: pngSourceImage },
+        referenceImages,
         innovationLevel: 50,
         requirement: instruction.trim(),
         count: 1,
@@ -1252,8 +1327,8 @@ export default function Home() {
                     setProductInputMode={setProductInputMode}
                     uploadedImage={uploadedImage}
                     setUploadedImage={setUploadedImage}
-                    referenceImage={referenceImage}
-                    setReferenceImage={setReferenceImage}
+                    referenceImages={referenceImages}
+                    setReferenceImages={setReferenceImages}
                     innovationLevel={innovationLevel}
                     setInnovationLevel={setInnovationLevel}
                     requirement={requirement}
@@ -1285,6 +1360,7 @@ export default function Home() {
                     isGeneratingVariant={status === "generating"}
                     onGenerateMultiView={generateMultiView}
                     onGenerateScene={generateScene}
+                    onGenerateDivergence={generateDivergence}
                     onGenerateFromPrompt={generateFromImagePrompt}
                     onGenerateDesignDescription={generateDesignDescription}
                     designDescriptionLoadingIds={designDescriptionLoadingIds}

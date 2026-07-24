@@ -4,7 +4,7 @@ import { HardDrive, Package, Plus, SlidersHorizontal } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LocalGalleryStats } from "@/lib/local-gallery";
 import { getGalleryDraggedImage } from "@/lib/image";
-import type { CustomCanvasGenerationRequest, GenerationBatch, GenerationMetadata, GenerationResult, GenerationStatus, UploadedImage } from "@/lib/types";
+import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, GenerationBatch, GenerationMetadata, GenerationResult, GenerationSourceImage, GenerationStatus, UploadedImage } from "@/lib/types";
 import { downloadResultsZip } from "@/lib/zip";
 import { CustomCanvasEditorModal } from "./CustomCanvasEditorModal";
 import { ImagePreviewModal } from "./ImagePreviewModal";
@@ -20,7 +20,12 @@ type GalleryProps = {
   count: number;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
-  onGenerateFromPrompt: (result: GenerationResult, instruction: string) => void;
+  onGenerateDivergence: (
+    result: GenerationResult,
+    productName: string | undefined,
+    request: CreativeDivergenceRequest
+  ) => void;
+  onGenerateFromPrompt: (result: GenerationResult, instruction: string, referenceImages?: GenerationSourceImage[]) => void;
   onGenerateDesignDescription: (result: GenerationResult) => Promise<string>;
   designDescriptionLoadingIds: string[];
   onLocalEdit: (
@@ -53,6 +58,7 @@ export function Gallery({
   onSuccess,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateDivergence,
   onGenerateFromPrompt,
   onGenerateDesignDescription,
   designDescriptionLoadingIds,
@@ -271,8 +277,14 @@ export function Gallery({
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
         }}
-        onGenerateFromPrompt={(result, instruction) => {
-          onGenerateFromPrompt(result, instruction);
+        onGenerateDivergence={(result, productName, request) => {
+          onGenerateDivergence(result, productName, request);
+          setPreview(null);
+          setPreviewMetadata(null);
+          setPreviewStartsEditing(false);
+        }}
+        onGenerateFromPrompt={(result, instruction, referenceImages) => {
+          onGenerateFromPrompt(result, instruction, referenceImages);
           setPreview(null);
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
@@ -341,6 +353,7 @@ function createCustomResult(request: CustomCanvasGenerationRequest): GenerationR
 
 function createCustomMetadata(request: CustomCanvasGenerationRequest): GenerationMetadata {
   return {
+    productName: request.productName,
     description: request.requirement,
     innovationLevel: request.innovationLevel,
     generationType: "design",

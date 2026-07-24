@@ -20,6 +20,7 @@ const requestSchema = z.object({
   maskImageBase64: z.string().startsWith("data:image/").optional(),
   localEditGuideImageBase64: z.string().startsWith("data:image/").optional(),
   referenceImageBase64: z.string().startsWith("data:image/").optional(),
+  referenceImageBase64s: z.array(z.string().startsWith("data:image/")).max(3).optional().default([]),
   innovationLevel: z.number().int().min(0).max(100).optional().default(50),
   requirement: z.string().optional().default(""),
   useExactPrompt: z.boolean().optional().default(false),
@@ -40,11 +41,11 @@ export async function POST(request: Request) {
       imageApiKey: provider.apiKey,
       imageApiBaseUrl: provider.baseUrl
     };
-    if (!payload.sketchImageBase64 && !payload.imageBase64 && !payload.referenceImageBase64 && !payload.requirement.trim() && !payload.productName) {
+    if (!payload.sketchImageBase64 && !payload.imageBase64 && !payload.referenceImageBase64 && !payload.referenceImageBase64s.length && !payload.requirement.trim() && !payload.productName) {
       throw new Error("请先填写产品名称，或提供可用于生成的图片和文字。");
     }
     const hasSketchImage = Boolean(payload.sketchImageBase64);
-    const hasReferenceImage = Boolean(payload.referenceImageBase64);
+    const hasReferenceImage = Boolean(payload.referenceImageBase64 || payload.referenceImageBase64s.length);
     const concept = buildDirectConcepts(
       payload.productName,
       payload.requirement,
@@ -86,12 +87,18 @@ async function submitConceptImage({
   hasSketchImage: boolean;
   hasReferenceImage: boolean;
 }) {
-  if (payload.sketchImageBase64 || payload.imageBase64 || payload.referenceImageBase64) {
+  if (payload.sketchImageBase64 || payload.imageBase64 || payload.referenceImageBase64 || payload.referenceImageBase64s.length) {
     return submitAsyncImageEdit({
       baseUrl: payload.imageApiBaseUrl,
       apiKey: payload.imageApiKey,
       imageModel: payload.imageModel,
-      inputImages: [payload.sketchImageBase64, payload.imageBase64, payload.localEditGuideImageBase64, payload.referenceImageBase64].filter((item): item is string => Boolean(item)),
+      inputImages: [
+        payload.sketchImageBase64,
+        payload.imageBase64,
+        payload.localEditGuideImageBase64,
+        payload.referenceImageBase64,
+        ...payload.referenceImageBase64s
+      ].filter((item): item is string => Boolean(item)),
       maskImage: payload.maskImageBase64,
       hasLocalEditGuide: Boolean(payload.localEditGuideImageBase64),
       prompt: conceptPrompt,

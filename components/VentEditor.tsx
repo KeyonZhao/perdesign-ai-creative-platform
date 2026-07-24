@@ -8,13 +8,15 @@ import {
   FileCode2,
   FileUp,
   Grid3X3,
+  Lock,
   RotateCcw,
-  Trash2
+  Trash2,
+  Unlock
 } from "lucide-react";
 
 type HoleShape = "circle" | "rectangle" | "polygon" | "star" | "slot" | "svg";
 type LayoutMode = "grid" | "honeycomb" | "radial" | "spiral" | "fibonacci";
-type PanelShape = "rectangle" | "circle" | "polygon";
+type PanelShape = "rectangle" | "circle" | "polygon" | "custom";
 type GradientMode = "none" | "radial" | "horizontal" | "vertical" | "diagonal" | "angle" | "wave" | "point";
 type DensityMode = "none" | "center-dense" | "edge-dense" | "gradient";
 type MaskMode = "only" | "exclude" | "larger" | "smaller";
@@ -79,6 +81,8 @@ type NormalizedPoint = {
   y: number;
 };
 
+const MAX_HOLE_COUNT = 120_000;
+
 const defaults: VentParams = {
   holeShape: "circle",
   layout: "grid",
@@ -100,7 +104,7 @@ const defaults: VentParams = {
   layoutRotation: 0,
   gradient: "none",
   gradientMin: 1.5,
-  gradientMax: 5,
+  gradientMax: 4,
   gradientAngle: 0,
   waveAmplitude: 30,
   waveFrequency: 2,
@@ -171,10 +175,13 @@ export function VentEditor() {
   const [maskSnapAxes, setMaskSnapAxes] = useState({ x: false, y: false });
   const [importedSvgShape, setImportedSvgShape] = useState<ImportedSvgShape | null>(null);
   const [svgImportError, setSvgImportError] = useState("");
+  const [importedPanelShape, setImportedPanelShape] = useState<ImportedSvgShape | null>(null);
+  const [panelSvgImportError, setPanelSvgImportError] = useState("");
   const [pngMask, setPngMask] = useState<PngMask | null>(null);
   const [pngMaskError, setPngMaskError] = useState("");
   const [marginSelected, setMarginSelected] = useState(false);
   const [holeDetailsOpen, setHoleDetailsOpen] = useState(false);
+  const [openMetricLock, setOpenMetricLock] = useState<"size" | "density">("density");
   const previewRef = useRef<SVGSVGElement | null>(null);
   const marginInputRef = useRef<HTMLInputElement | null>(null);
   const marginDraggingRef = useRef(false);
@@ -184,13 +191,18 @@ export function VentEditor() {
     startPosition: NormalizedPoint;
   } | null>(null);
   const svgFileInputRef = useRef<HTMLInputElement | null>(null);
+  const panelSvgFileInputRef = useRef<HTMLInputElement | null>(null);
   const pngMaskInputRef = useRef<HTMLInputElement | null>(null);
 
-  const panelOutline = useMemo(() => makePanelOutline(params), [params]);
-  const holes = useMemo(
-    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask, maskPosition),
-    [gradientPoint, importedSvgShape, maskPosition, params, pngMask]
+  const panelOutline = useMemo(
+    () => makePanelOutline(params, importedPanelShape?.points),
+    [importedPanelShape, params]
   );
+  const holes = useMemo(
+    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask, maskPosition, panelOutline),
+    [gradientPoint, importedSvgShape, maskPosition, panelOutline, params, pngMask]
+  );
+  const holePreviewPath = useMemo(() => buildHolePreviewPath(holes), [holes]);
   const maskBounds = useMemo(
     () => (pngMask ? getPngMaskBounds(params, pngMask, maskPosition) : null),
     [maskPosition, params, pngMask]
@@ -214,6 +226,30 @@ export function VentEditor() {
     setParams((current) => ({ ...current, [key]: value }));
   }
 
+  function updateHoleSize(value: number) {
+    setParams((current) => ({
+      ...current,
+      holeSize: value,
+      gradientMax: value
+    }));
+  }
+
+  function updateGradientMode(value: GradientMode) {
+    setParams((current) => ({
+      ...current,
+      gradient: value,
+      gradientMax: value === "none" ? current.gradientMax : current.holeSize
+    }));
+  }
+
+  function updateGradientMaximum(value: number) {
+    setParams((current) => ({
+      ...current,
+      gradientMax: value,
+      holeSize: value
+    }));
+  }
+
   function updateHoleDensity(value: number) {
     setParams((current) => {
       const bounds = densityPitchBounds(current);
@@ -226,12 +262,58 @@ export function VentEditor() {
     });
   }
 
+  function updatePanelDimension(key: "panelWidth" | "panelHeight", value: number) {
+    const dimension = clamp(value, 1, 5000);
+    setParams((current) => {
+      const panelWidth = key === "panelWidth" ? dimension : current.panelWidth;
+      const panelHeight = key === "panelHeight" ? dimension : current.panelHeight;
+      return {
+        ...current,
+        [key]: dimension,
+        margin: Math.min(
+          current.margin,
+          Math.max(0, Math.floor(Math.min(panelWidth, panelHeight) / 2 - 0.5))
+        )
+      };
+    });
+  }
+
+  function updateTargetOpenArea(targetArea: number) {
+    if (!holes.length || openArea <= 0 || panelArea <= 0) return;
+    const safeTarget = clamp(targetArea, panelArea * 0.0001, panelArea * 0.95);
+    const scale = Math.sqrt(safeTarget / openArea);
+    const maximumSize = Math.max(params.panelWidth, params.panelHeight);
+    const scaled = (value: number) => Number(clamp(value * scale, 0.05, maximumSize).toFixed(3));
+
+    if (openMetricLock === "size") {
+      const pitchScale = Math.sqrt(openArea / safeTarget);
+      const maximumPitch = Math.max(params.panelWidth, params.panelHeight) * 2;
+      const scaledPitch = (value: number) => Number(clamp(value * pitchScale, 0.5, maximumPitch).toFixed(3));
+      setParams((current) => ({
+        ...current,
+        pitchX: scaledPitch(current.pitchX),
+        pitchY: scaledPitch(current.pitchY),
+        rows: 0,
+        columns: 0
+      }));
+      return;
+    }
+
+    setParams((current) => ({
+      ...current,
+      holeSize: scaled(current.holeSize),
+      holeHeight: scaled(current.holeHeight),
+      gradientMin: scaled(current.gradientMin),
+      gradientMax: scaled(current.gradientMax)
+    }));
+  }
+
   async function importSvgShape(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
     setSvgImportError("");
     try {
-      const points = await parseSvgOutline(file);
+      const points = await parseSvgOutline(file, "孔型");
       setImportedSvgShape({ name: file.name, points });
       setParams((current) => ({ ...current, holeShape: "svg" }));
     } catch (error) {
@@ -248,6 +330,31 @@ export function VentEditor() {
     setParams((current) => ({
       ...current,
       holeShape: current.holeShape === "svg" ? "circle" : current.holeShape
+    }));
+  }
+
+  async function importPanelSvgShape(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setPanelSvgImportError("");
+    try {
+      const points = await parseSvgOutline(file, "面板轮廓");
+      setImportedPanelShape({ name: file.name, points });
+      setParams((current) => ({ ...current, panelShape: "custom" }));
+    } catch (error) {
+      setImportedPanelShape(null);
+      setPanelSvgImportError(error instanceof Error ? error.message : "无法读取这个 SVG 面板轮廓。");
+    } finally {
+      if (panelSvgFileInputRef.current) panelSvgFileInputRef.current.value = "";
+    }
+  }
+
+  function clearPanelSvgShape() {
+    setImportedPanelShape(null);
+    setPanelSvgImportError("");
+    setParams((current) => ({
+      ...current,
+      panelShape: current.panelShape === "custom" ? "rectangle" : current.panelShape
     }));
   }
 
@@ -458,12 +565,47 @@ export function VentEditor() {
               options={[
                 { value: "rectangle", label: "矩形面板" },
                 { value: "circle", label: "圆形面板" },
-                { value: "polygon", label: "正多边形面板" }
+                { value: "polygon", label: "正多边形面板" },
+                { value: "custom", label: "导入 SVG 自定义面板" }
               ]}
               onChange={(value) => patch("panelShape", value as PanelShape)}
             />
             {params.panelShape === "polygon" ? (
               <NumberField label="面板边数" value={params.sides} min={3} max={16} step={1} onChange={(value) => patch("sides", Math.round(value))} />
+            ) : null}
+            {params.panelShape === "custom" ? (
+              <div className={`vent-svg-import-card ${panelSvgImportError ? "error" : ""}`}>
+                <input
+                  ref={panelSvgFileInputRef}
+                  type="file"
+                  accept=".svg,image/svg+xml"
+                  hidden
+                  onChange={(event) => void importPanelSvgShape(event.target.files)}
+                />
+                <div className="vent-svg-import-actions">
+                  <button type="button" className="vent-svg-import-button" onClick={() => panelSvgFileInputRef.current?.click()}>
+                    <FileUp className="h-4 w-4" />
+                    <span>{importedPanelShape ? "更换面板 SVG" : "导入面板 SVG"}</span>
+                  </button>
+                  {importedPanelShape ? (
+                    <button type="button" className="vent-svg-clear-button" onClick={clearPanelSvgShape} aria-label="清除自定义面板" title="清除自定义面板">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="vent-svg-import-status">
+                  {panelSvgImportError ? (
+                    <span>{panelSvgImportError}</span>
+                  ) : importedPanelShape ? (
+                    <>
+                      <strong>{importedPanelShape.name}</strong>
+                      <span>已识别 {importedPanelShape.points.length} 个轮廓点</span>
+                    </>
+                  ) : (
+                    <span>导入闭合 SVG 线稿作为面板外轮廓。</span>
+                  )}
+                </div>
+              </div>
             ) : null}
           </ControlSection>
 
@@ -572,13 +714,28 @@ export function VentEditor() {
                 min={0.1}
                 step={0.5}
                 unit="mm"
-                onChange={(value) => patch("holeSize", value)}
+                disabled={params.gradient !== "none"}
+                headerAction={
+                  <ParameterLockButton
+                    label="孔尺寸"
+                    locked={openMetricLock === "size"}
+                    onClick={() => setOpenMetricLock("size")}
+                  />
+                }
+                onChange={updateHoleSize}
               />
-              <label className="vent-density-quick">
-                <span>
+              <div className="vent-density-quick">
+                <div className="vent-density-heading">
                   <b>孔密度</b>
-                  <strong>{holeDensity}%</strong>
-                </span>
+                  <span>
+                    <strong>{holeDensity}%</strong>
+                    <ParameterLockButton
+                      label="孔密度"
+                      locked={openMetricLock === "density"}
+                      onClick={() => setOpenMetricLock("density")}
+                    />
+                  </span>
+                </div>
                 <input
                   type="range"
                   value={holeDensity}
@@ -592,7 +749,7 @@ export function VentEditor() {
                   <span>疏朗</span>
                   <span>紧密</span>
                 </small>
-              </label>
+              </div>
               {holeDetailsOpen ? (
                 <div id="vent-hole-detail-fields" className="vent-hole-detail-fields">
                   <div className="vent-field-grid">
@@ -625,13 +782,13 @@ export function VentEditor() {
               label="尺寸渐变路径"
               value={params.gradient}
               options={gradientOptions}
-              onChange={(value) => patch("gradient", value as GradientMode)}
+              onChange={(value) => updateGradientMode(value as GradientMode)}
             />
             {params.gradient !== "none" ? (
               <>
                 <div className="vent-field-grid">
                   <NumberField label="最小尺寸" value={params.gradientMin} min={0.1} step={0.5} unit="mm" onChange={(value) => patch("gradientMin", value)} />
-                  <NumberField label="最大尺寸" value={params.gradientMax} min={0.1} step={0.5} unit="mm" onChange={(value) => patch("gradientMax", value)} />
+                  <NumberField label="最大尺寸" value={params.gradientMax} min={0.1} step={0.5} unit="mm" onChange={updateGradientMaximum} />
                   {params.gradient === "angle" ? (
                     <NumberField label="渐变角度" value={params.gradientAngle} step={5} unit="°" onChange={(value) => patch("gradientAngle", value)} />
                   ) : null}
@@ -677,6 +834,7 @@ export function VentEditor() {
               setMaskSelected(false);
               setMaskSnapAxes({ x: false, y: false });
               setHoleDetailsOpen(false);
+              setOpenMetricLock("density");
             }}
           >
             <RotateCcw className="h-4 w-4" />
@@ -691,61 +849,25 @@ export function VentEditor() {
                 <Grid3X3 className="h-4 w-4" />
                 <span>实时预览</span>
               </div>
-              <ToggleField label="安全模式" checked={params.safe} onChange={(value) => patch("safe", value)} />
             </div>
             <div className="vent-preview-toolbar">
               <div className="vent-metrics">
                 <span><strong>{holes.length}</strong> 个孔</span>
-                <span className={openRate > 60 ? "warning" : ""}><strong>{openRate.toFixed(1)}%</strong> 开孔率</span>
-                <span><strong>{formatNumber(openArea)}</strong> mm² 开孔面积</span>
-                <div className="vent-dimension-editor" aria-label="面板尺寸">
-                  <label>
-                    <small>宽</small>
-                    <input
-                      type="number"
-                      value={params.panelWidth}
-                      min={20}
-                      max={2000}
-                      step={1}
-                      aria-label="板宽"
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          const panelWidth = clamp(value, 20, 2000);
-                          setParams((current) => ({
-                            ...current,
-                            panelWidth,
-                            margin: Math.min(current.margin, Math.max(0, Math.floor(Math.min(panelWidth, current.panelHeight) / 2 - 0.5)))
-                          }));
-                        }
-                      }}
-                    />
-                  </label>
-                  <b>×</b>
-                  <label>
-                    <small>高</small>
-                    <input
-                      type="number"
-                      value={params.panelHeight}
-                      min={20}
-                      max={2000}
-                      step={1}
-                      aria-label="板高"
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          const panelHeight = clamp(value, 20, 2000);
-                          setParams((current) => ({
-                            ...current,
-                            panelHeight,
-                            margin: Math.min(current.margin, Math.max(0, Math.floor(Math.min(current.panelWidth, panelHeight) / 2 - 0.5)))
-                          }));
-                        }
-                      }}
-                    />
-                  </label>
-                  <em>mm</em>
-                </div>
+                <MetricNumberInput
+                  label="开孔率"
+                  value={openRate}
+                  suffix="%"
+                  maximum={95}
+                  warning={openRate > 60}
+                  onCommit={(value) => updateTargetOpenArea(panelArea * clamp(value, 0.01, 95) / 100)}
+                />
+                <MetricNumberInput
+                  label="开孔面积"
+                  value={openArea}
+                  suffix="mm²"
+                  maximum={panelArea * 0.95}
+                  onCommit={updateTargetOpenArea}
+                />
               </div>
               <div className="vent-header-actions">
                 <button type="button" className="btn-secondary vent-action-button" onClick={exportDxf}>
@@ -761,7 +883,13 @@ export function VentEditor() {
           </div>
 
           <div className="vent-canvas-stage">
-            <div className="vent-canvas-frame" style={{ aspectRatio: `${params.panelWidth} / ${params.panelHeight}` }}>
+            <div
+              className="vent-canvas-frame"
+              style={{
+                aspectRatio: `${params.panelWidth} / ${params.panelHeight}`,
+                "--vent-panel-ratio": params.panelWidth / params.panelHeight
+              } as React.CSSProperties}
+            >
               <svg
                 ref={previewRef}
                 className={`vent-canvas-svg ${params.gradient === "point" ? "point-editing" : ""}`}
@@ -826,29 +954,21 @@ export function VentEditor() {
                 >
                   <polygon
                     className="vent-safety-hit-area"
-                    points={pointsAttribute(makeSafetyOutline(params))}
+                    points={pointsAttribute(makeSafetyOutline(params, panelOutline))}
                     fill="none"
                     stroke="transparent"
                     strokeWidth={4}
                   />
                   <polygon
                     className="vent-safety-line"
-                    points={pointsAttribute(makeSafetyOutline(params))}
+                    points={pointsAttribute(makeSafetyOutline(params, panelOutline))}
                     fill="none"
                     stroke="#55555d"
                     strokeWidth={0.2}
                     strokeDasharray="1.2 1.2"
                   />
                 </g>
-                <g fill="#8b8b93" pointerEvents="none">
-                  {holes.map((item, index) =>
-                    item.kind === "circle" ? (
-                      <circle key={index} cx={item.x} cy={item.y} r={item.size / 2} />
-                    ) : (
-                      <polygon key={index} points={pointsAttribute(item.points)} />
-                    )
-                  )}
-                </g>
+                <path d={holePreviewPath} fill="#8b8b93" pointerEvents="none" />
                 {pngMask && (maskSnapAxes.x || maskSnapAxes.y) ? (
                   <g className="vent-mask-snap-guides" aria-hidden="true">
                     {maskSnapAxes.x ? (
@@ -879,6 +999,18 @@ export function VentEditor() {
                   </g>
                 ) : null}
               </svg>
+              <EdgeDimensionInput
+                className="width"
+                label="板宽"
+                value={params.panelWidth}
+                onCommit={(value) => updatePanelDimension("panelWidth", value)}
+              />
+              <EdgeDimensionInput
+                className="height"
+                label="板高"
+                value={params.panelHeight}
+                onCommit={(value) => updatePanelDimension("panelHeight", value)}
+              />
               {marginSelected ? (
                 <label
                   className="vent-safety-inline-editor"
@@ -1008,6 +1140,8 @@ function NumberField({
   step = 0.5,
   unit,
   hint,
+  disabled = false,
+  headerAction,
   onChange
 }: {
   label: string;
@@ -1017,11 +1151,16 @@ function NumberField({
   step?: number;
   unit?: string;
   hint?: string;
+  disabled?: boolean;
+  headerAction?: React.ReactNode;
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="vent-number-field">
-      <span className="vent-field-label">{label}{hint ? <small>{hint}</small> : null}</span>
+    <div className={`vent-number-field ${disabled ? "disabled" : ""}`} aria-disabled={disabled}>
+      <div className="vent-field-label">
+        <span>{label}{hint ? <small>{hint}</small> : null}</span>
+        {headerAction}
+      </div>
       <span className="vent-number-input">
         <input
           type="number"
@@ -1029,6 +1168,8 @@ function NumberField({
           min={min}
           max={max}
           step={step}
+          disabled={disabled}
+          aria-label={`${label}${unit ? ` ${unit}` : ""}`}
           onChange={(event) => {
             const next = Number(event.target.value);
             if (Number.isFinite(next)) onChange(clamp(next, min ?? -99999, max ?? 99999));
@@ -1036,7 +1177,33 @@ function NumberField({
         />
         {unit ? <em>{unit}</em> : null}
       </span>
-    </label>
+    </div>
+  );
+}
+
+function ParameterLockButton({
+  label,
+  locked,
+  onClick
+}: {
+  label: string;
+  locked: boolean;
+  onClick: () => void;
+}) {
+  const title = locked
+    ? `${label}已锁定，调整开孔率或开孔面积时保持不变`
+    : `锁定${label}`;
+  return (
+    <button
+      type="button"
+      className={`vent-parameter-lock ${locked ? "active" : ""}`}
+      aria-label={title}
+      aria-pressed={locked}
+      title={title}
+      onClick={onClick}
+    >
+      {locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+    </button>
   );
 }
 
@@ -1071,6 +1238,122 @@ function RangeField({
       <input type="range" value={value} min={min} max={max} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
+}
+
+function EditableNumber({
+  value,
+  minimum,
+  maximum,
+  decimals = 1,
+  ariaLabel,
+  onCommit
+}: {
+  value: number;
+  minimum: number;
+  maximum: number;
+  decimals?: number;
+  ariaLabel: string;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(formatEditableNumber(value, decimals));
+
+  useEffect(() => {
+    setDraft(formatEditableNumber(value, decimals));
+  }, [decimals, value]);
+
+  function commit() {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(formatEditableNumber(value, decimals));
+      return;
+    }
+    onCommit(clamp(parsed, minimum, maximum));
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      aria-label={ariaLabel}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          setDraft(formatEditableNumber(value, decimals));
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
+function MetricNumberInput({
+  label,
+  value,
+  suffix,
+  maximum,
+  warning = false,
+  onCommit
+}: {
+  label: string;
+  value: number;
+  suffix: string;
+  maximum: number;
+  warning?: boolean;
+  onCommit: (value: number) => void;
+}) {
+  return (
+    <label className={`vent-metric-editor ${warning ? "warning" : ""}`}>
+      <EditableNumber
+        value={value}
+        minimum={0.01}
+        maximum={Math.max(0.01, maximum)}
+        decimals={1}
+        ariaLabel={label}
+        onCommit={onCommit}
+      />
+      <b>{suffix}</b>
+      <small>{label}</small>
+    </label>
+  );
+}
+
+function EdgeDimensionInput({
+  className,
+  label,
+  value,
+  onCommit
+}: {
+  className: "width" | "height";
+  label: string;
+  value: number;
+  onCommit: (value: number) => void;
+}) {
+  return (
+    <label className={`vent-edge-dimension ${className}`}>
+      <small>{label}</small>
+      <EditableNumber
+        value={value}
+        minimum={1}
+        maximum={5000}
+        decimals={1}
+        ariaLabel={label}
+        onCommit={onCommit}
+      />
+      <em>mm</em>
+    </label>
+  );
+}
+
+function formatEditableNumber(value: number, decimals: number) {
+  if (!Number.isFinite(value)) return "";
+  return Number(value.toFixed(decimals)).toString();
 }
 
 async function decodePngMask(file: File): Promise<PngMask> {
@@ -1154,7 +1437,7 @@ function estimatePngBackground(pixels: Uint8ClampedArray, width: number, height:
   return [total[0] / count, total[1] / count, total[2] / count] as [number, number, number];
 }
 
-async function parseSvgOutline(file: File) {
+async function parseSvgOutline(file: File, label = "孔型") {
   const source = await file.text();
   const svgDocument = new DOMParser().parseFromString(source, "image/svg+xml");
   if (svgDocument.querySelector("parsererror")) {
@@ -1222,7 +1505,7 @@ async function parseSvgOutline(file: File) {
     }
 
     if (!candidates.length) {
-      throw new Error("没有识别到有效线框，请将孔型转换为闭合路径后重新导入。");
+      throw new Error(`没有识别到有效${label}，请转换为闭合路径后重新导入。`);
     }
 
     const usableCandidates = candidates.some((candidate) => !candidate.frameLike)
@@ -1232,7 +1515,7 @@ async function parseSvgOutline(file: File) {
       outlineSelectionScore(current.points) > outlineSelectionScore(largest.points) ? current : largest
     ).points;
     const normalized = normalizeImportedPoints(outline);
-    if (normalized.length < 3) throw new Error("识别到的 SVG 轮廓点不足，无法作为孔型。");
+    if (normalized.length < 3) throw new Error(`识别到的 SVG 轮廓点不足，无法作为${label}。`);
     return normalized;
   } finally {
     sandbox.remove();
@@ -1390,13 +1673,15 @@ function createHoles(
   point: { x: number; y: number },
   svgPoints?: Array<[number, number]>,
   pngMask?: PngMask | null,
-  maskPosition: NormalizedPoint = { x: 0.5, y: 0.5 }
+  maskPosition: NormalizedPoint = { x: 0.5, y: 0.5 },
+  panelOutline = makePanelOutline(params)
 ) {
   if (params.holeShape === "svg" && !svgPoints?.length) return [];
   const candidates = createLayoutCandidates(params);
   const result: HoleItem[] = [];
+  const boundaryOutline = params.safe ? makeSafetyOutline(params, panelOutline) : panelOutline;
 
-  candidates.slice(0, 5000).forEach((candidate, index) => {
+  candidates.slice(0, MAX_HOLE_COUNT).forEach((candidate) => {
     const rotated = rotateAroundCenter(candidate.x, candidate.y, params, degrees(params.layoutRotation));
     const gradient = gradientValue(rotated.x, rotated.y, params, point);
     if (!densityKeep(rotated.x, rotated.y, candidate.row, candidate.column, gradient, params)) return;
@@ -1414,8 +1699,7 @@ function createHoles(
       size *= Math.max(0.1, 1 - params.maskStrength / 100 * 0.9);
     }
     const item = makeHoleItem(rotated.x, rotated.y, size, params, candidate.rotation + degrees(params.layoutRotation), svgPoints);
-    if (params.safe && !itemInsideOutline(item, makeSafetyOutline(params))) return;
-    if (!params.safe && !itemInsideOutline(item, makePanelOutline(params))) return;
+    if (!itemInsideOutline(item, boundaryOutline)) return;
     result.push(item);
   });
 
@@ -1501,7 +1785,7 @@ function createLayoutCandidates(params: VentParams) {
   if (params.layout === "spiral" || params.layout === "fibonacci") {
     const maxRadius = Math.max(0, Math.min(width, height) / 2 - margin);
     const automaticCount = Math.max(30, Math.floor(width * height / Math.max(1, pitchX * pitchY) * 0.78));
-    const count = Math.min(5000, params.rows && params.columns ? params.rows * params.columns : automaticCount);
+    const count = Math.min(MAX_HOLE_COUNT, params.rows && params.columns ? params.rows * params.columns : automaticCount);
     const goldenAngle = degrees(137.5);
     for (let index = 0; index < count; index += 1) {
       const progress = (index + 0.5) / Math.max(1, count);
@@ -1540,7 +1824,7 @@ function createLayoutCandidates(params: VentParams) {
   for (let row = 0; row < rows; row += 1) {
     const shift = params.layout === "honeycomb" && row % 2 ? pitchX / 2 : 0;
     for (let column = 0; column < columns; column += 1) {
-      if (out.length >= 5000) return out;
+      if (out.length >= MAX_HOLE_COUNT) return out;
       out.push({
         x: startX + column * pitchX + shift,
         y: startY + row * actualPitchY,
@@ -1645,9 +1929,12 @@ function densityKeep(x: number, y: number, row: number, column: number, gradient
   return stableNoise(row, column) <= keepProbability;
 }
 
-function makePanelOutline(params: VentParams) {
+function makePanelOutline(params: VentParams, customPoints?: Array<[number, number]>) {
   const width = params.panelWidth;
   const height = params.panelHeight;
+  if (params.panelShape === "custom" && customPoints?.length) {
+    return fitImportedPanelOutline(customPoints, width, height);
+  }
   if (params.panelShape === "circle") {
     return regularPolygon(width / 2, height / 2, Math.min(width, height) / 2, 72, -Math.PI / 2);
   }
@@ -1657,10 +1944,33 @@ function makePanelOutline(params: VentParams) {
   return [[0, 0], [width, 0], [width, height], [0, height]] as Array<[number, number]>;
 }
 
-function makeSafetyOutline(params: VentParams) {
+function fitImportedPanelOutline(points: Array<[number, number]>, width: number, height: number) {
+  const bounds = outlineBounds(points);
+  const scale = Math.min(
+    width / Math.max(bounds.width, 1e-6),
+    height / Math.max(bounds.height, 1e-6)
+  );
+  const sourceCenterX = bounds.x + bounds.width / 2;
+  const sourceCenterY = bounds.y + bounds.height / 2;
+  return points.map(([x, y]) => [
+    width / 2 + (x - sourceCenterX) * scale,
+    height / 2 + (y - sourceCenterY) * scale
+  ] as [number, number]);
+}
+
+function makeSafetyOutline(params: VentParams, panelOutline = makePanelOutline(params)) {
   const margin = Math.min(params.margin, params.panelWidth / 2 - 0.1, params.panelHeight / 2 - 0.1);
   const width = params.panelWidth;
   const height = params.panelHeight;
+  if (params.panelShape === "custom" && panelOutline.length) {
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const scale = Math.max(0.01, 1 - margin * 2 / Math.max(0.1, Math.min(width, height)));
+    return panelOutline.map(([x, y]) => [
+      centerX + (x - centerX) * scale,
+      centerY + (y - centerY) * scale
+    ] as [number, number]);
+  }
   if (params.panelShape === "circle") {
     return regularPolygon(width / 2, height / 2, Math.max(0.1, Math.min(width, height) / 2 - margin), 72, -Math.PI / 2);
   }
@@ -1777,6 +2087,25 @@ function stableNoise(row: number, column: number) {
   return value - Math.floor(value);
 }
 
+function buildHolePreviewPath(holes: HoleItem[]) {
+  return holes.map((item) => {
+    if (item.kind === "circle") {
+      const radius = item.size / 2;
+      return [
+        `M${pathNumber(item.x - radius)} ${pathNumber(item.y)}`,
+        `a${pathNumber(radius)} ${pathNumber(radius)} 0 1 0 ${pathNumber(radius * 2)} 0`,
+        `a${pathNumber(radius)} ${pathNumber(radius)} 0 1 0 ${pathNumber(-radius * 2)} 0`
+      ].join(" ");
+    }
+    if (!item.points.length) return "";
+    return `M${item.points.map(([x, y]) => `${pathNumber(x)} ${pathNumber(y)}`).join(" L")} Z`;
+  }).join(" ");
+}
+
+function pathNumber(value: number) {
+  return Number(value.toFixed(3));
+}
+
 function buildSvg(params: VentParams, holes: HoleItem[], outline: Array<[number, number]>) {
   const lines = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${params.panelWidth}mm" height="${params.panelHeight}mm" viewBox="0 0 ${params.panelWidth} ${params.panelHeight}">`,
@@ -1834,19 +2163,12 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function densityPitchBounds(params: VentParams) {
-  const scale = params.holeShape === "svg" ? params.svgShapeScale : 1;
-  const minimumX = Math.max(0.5, params.holeSize * scale);
-  const minimumY = params.holeShape === "rectangle"
-    ? Math.max(0.5, params.holeHeight)
-    : params.holeShape === "slot"
-      ? Math.max(0.5, Math.min(params.holeHeight, params.holeSize))
-      : minimumX;
+function densityPitchBounds(_params: VentParams) {
   return {
-    minimumX,
-    minimumY,
-    maximumX: Math.max(minimumX + 0.5, minimumX * 3),
-    maximumY: Math.max(minimumY + 0.5, minimumY * 3)
+    minimumX: 0.5,
+    minimumY: 0.5,
+    maximumX: 15.5,
+    maximumY: 15.5
   };
 }
 

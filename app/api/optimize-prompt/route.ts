@@ -12,6 +12,7 @@ const requestSchema = z.object({
   productImageBase64: z.string().startsWith("data:image/").optional(),
   sketchImageBase64: z.string().startsWith("data:image/").optional(),
   referenceImageBase64: z.string().startsWith("data:image/").optional(),
+  referenceImageBase64s: z.array(z.string().startsWith("data:image/")).max(3).optional().default([]),
   innovationLevel: z.number().int().min(0).max(100).optional().default(50)
 }).refine(
   (value) =>
@@ -20,7 +21,8 @@ const requestSchema = z.object({
       value.userPrompt.trim() ||
       value.productImageBase64 ||
       value.sketchImageBase64 ||
-      value.referenceImageBase64
+      value.referenceImageBase64 ||
+      value.referenceImageBase64s.length
     ),
   { message: "请填写文字描述，或上传可用于撰写提示词的图片。" }
 );

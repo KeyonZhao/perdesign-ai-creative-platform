@@ -30,15 +30,34 @@ export type GenerationSourceImage = {
   dataUrl: string;
 };
 
-export type GenerationType = "design" | "multi-view" | "scene" | "local-edit" | "image-prompt";
+export type DivergenceStyleId =
+  | "precision"
+  | "soft"
+  | "dynamic"
+  | "minimal"
+  | "professional"
+  | "signature"
+  | "modern-minimal"
+  | "industrial-rugged"
+  | "future-sci-fi";
+
+export type CreativeDivergenceRequest = {
+  styleIds?: DivergenceStyleId[];
+  referenceImage?: GenerationSourceImage;
+};
+
+export type GenerationType = "design" | "multi-view" | "scene" | "divergence" | "local-edit" | "image-prompt";
 
 export type GenerationMetadata = {
+  productName?: string;
   description: string;
   innovationLevel: number;
   generationType?: GenerationType;
+  divergenceStyles?: string[];
   sketchImage?: GenerationSourceImage;
   productImage?: GenerationSourceImage;
   referenceImage?: GenerationSourceImage;
+  referenceImages?: GenerationSourceImage[];
 };
 
 export type GenerationBatch = {

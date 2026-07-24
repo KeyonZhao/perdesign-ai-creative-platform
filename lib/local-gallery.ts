@@ -13,10 +13,11 @@ type StoredGenerationSourceImage = Omit<GenerationSourceImage, "dataUrl"> & {
   imageBlob: Blob;
 };
 
-type StoredGenerationMetadata = Omit<GenerationMetadata, "sketchImage" | "productImage" | "referenceImage"> & {
+type StoredGenerationMetadata = Omit<GenerationMetadata, "sketchImage" | "productImage" | "referenceImage" | "referenceImages"> & {
   sketchImage?: StoredGenerationSourceImage;
   productImage?: StoredGenerationSourceImage;
   referenceImage?: StoredGenerationSourceImage;
+  referenceImages?: StoredGenerationSourceImage[];
 };
 
 type StoredGenerationBatch = {
@@ -104,7 +105,8 @@ export async function getLocalGalleryStats(): Promise<LocalGalleryStats> {
           batch.results.reduce((batchSum, result) => batchSum + (result.imageBlob?.size || 0), 0) +
           (batch.metadata?.sketchImage?.imageBlob.size || 0) +
           (batch.metadata?.productImage?.imageBlob.size || 0) +
-          (batch.metadata?.referenceImage?.imageBlob.size || 0),
+          (batch.metadata?.referenceImage?.imageBlob.size || 0) +
+          (batch.metadata?.referenceImages?.reduce((imageSum, image) => imageSum + image.imageBlob.size, 0) || 0),
         0
       ),
       browserUsage: storageEstimate?.usage,
@@ -131,9 +133,13 @@ async function storeBatch(batch: GenerationBatch, createdAt: number): Promise<St
           description: batch.metadata.description,
           innovationLevel: batch.metadata.innovationLevel,
           generationType: batch.metadata.generationType,
+          divergenceStyles: batch.metadata.divergenceStyles,
           sketchImage: storeSourceImage(batch.metadata.sketchImage),
           productImage: storeSourceImage(batch.metadata.productImage),
-          referenceImage: storeSourceImage(batch.metadata.referenceImage)
+          referenceImage: storeSourceImage(batch.metadata.referenceImage),
+          referenceImages: batch.metadata.referenceImages
+            ?.map((image) => storeSourceImage(image))
+            .filter((image): image is StoredGenerationSourceImage => Boolean(image))
         }
       : undefined,
     results: await Promise.all(
@@ -151,11 +157,16 @@ async function restoreBatch(batch: StoredGenerationBatch): Promise<GenerationBat
     metadata: batch.metadata
       ? {
           description: batch.metadata.description,
-            innovationLevel: batch.metadata.innovationLevel,
-            generationType: batch.metadata.generationType,
-            sketchImage: await restoreSourceImage(batch.metadata.sketchImage),
-            productImage: await restoreSourceImage(batch.metadata.productImage),
-          referenceImage: await restoreSourceImage(batch.metadata.referenceImage)
+          innovationLevel: batch.metadata.innovationLevel,
+          generationType: batch.metadata.generationType,
+          divergenceStyles: batch.metadata.divergenceStyles,
+          sketchImage: await restoreSourceImage(batch.metadata.sketchImage),
+          productImage: await restoreSourceImage(batch.metadata.productImage),
+          referenceImage: await restoreSourceImage(batch.metadata.referenceImage),
+          referenceImages: batch.metadata.referenceImages
+            ? await Promise.all(batch.metadata.referenceImages.map((image) => restoreSourceImage(image)))
+                .then((images) => images.filter((image): image is GenerationSourceImage => Boolean(image)))
+            : undefined
         }
       : undefined,
     results: await Promise.all(

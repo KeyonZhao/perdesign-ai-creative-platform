@@ -96,12 +96,17 @@ export async function optimizeUserPrompt(params: {
   productImageBase64?: string;
   sketchImageBase64?: string;
   referenceImageBase64?: string;
+  referenceImageBase64s?: string[];
   innovationLevel?: number;
 }) {
   const productName = params.productName.trim();
   const hasProduct = Boolean(params.productImageBase64);
   const hasSketch = Boolean(params.sketchImageBase64);
-  const hasReference = Boolean(params.referenceImageBase64);
+  const referenceImages = [
+    ...(params.referenceImageBase64 ? [params.referenceImageBase64] : []),
+    ...(params.referenceImageBase64s || [])
+  ].slice(0, 3);
+  const hasReference = referenceImages.length > 0;
   if (!productName && !params.userPrompt.trim() && !hasProduct && !hasSketch && !hasReference) {
     throw new Error("请填写文字描述，或上传可用于撰写提示词的图片。");
   }
@@ -117,7 +122,9 @@ export async function optimizeUserPrompt(params: {
     imageIndex += 1;
   }
   if (hasReference) {
-    imageRoles.push(`图片${imageIndex}是设计参考图，只用于提取和迁移适合的设计语言`);
+    referenceImages.forEach((_, referenceIndex) => {
+      imageRoles.push(`图片${imageIndex + referenceIndex}是设计参考图${referenceImages.length > 1 ? ` ${referenceIndex + 1}` : ""}，只用于提取和迁移适合的设计语言`);
+    });
   }
 
   const content: ChatMessage["content"] = [
@@ -138,7 +145,9 @@ export async function optimizeUserPrompt(params: {
   ];
   if (params.productImageBase64) content.push({ type: "image_url", image_url: { url: params.productImageBase64 } });
   if (params.sketchImageBase64) content.push({ type: "image_url", image_url: { url: params.sketchImageBase64 } });
-  if (params.referenceImageBase64) content.push({ type: "image_url", image_url: { url: params.referenceImageBase64 } });
+  referenceImages.forEach((image) => {
+    content.push({ type: "image_url", image_url: { url: image } });
+  });
 
   return callChatCompletion({
     baseUrl: params.baseUrl,

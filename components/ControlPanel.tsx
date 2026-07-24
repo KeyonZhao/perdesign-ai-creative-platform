@@ -7,6 +7,7 @@ import { Check, ChevronDown, Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-
 import { sizeOptions } from "@/lib/models";
 import type { GenerationStatus, ProductInputMode, UploadedImage } from "@/lib/types";
 import { ImageUploader } from "./ImageUploader";
+import { ReferenceImageUploader } from "./ReferenceImageUploader";
 
 function getSizePreviewClass(value: string) {
   if (value === "1536x1024") return "landscape";
@@ -99,8 +100,8 @@ type ControlPanelProps = {
   setProductInputMode: (mode: ProductInputMode) => void;
   uploadedImage: UploadedImage | null;
   setUploadedImage: (image: UploadedImage | null) => void;
-  referenceImage: UploadedImage | null;
-  setReferenceImage: (image: UploadedImage | null) => void;
+  referenceImages: UploadedImage[];
+  setReferenceImages: (images: UploadedImage[]) => void;
   innovationLevel: number;
   setInnovationLevel: (value: number) => void;
   requirement: string;
@@ -126,7 +127,7 @@ export function ControlPanel(props: ControlPanelProps) {
     props.productName.trim() ||
     props.requirement.trim() ||
     props.uploadedImage ||
-    props.referenceImage
+    props.referenceImages.length
   );
 
   return (
@@ -158,14 +159,10 @@ export function ControlPanel(props: ControlPanelProps) {
           onInputModeChange={props.setProductInputMode}
         />
 
-        <ImageUploader
-          value={props.referenceImage}
-          onChange={props.setReferenceImage}
+        <ReferenceImageUploader
+          values={props.referenceImages}
+          onChange={props.setReferenceImages}
           onError={props.onError}
-          title="参考图"
-          emptyTitle="拖入参考图，提取风格语言"
-          helperText="选填。仅参考材质、配色、细节和设计语言，不复制产品造型"
-          imageAlt="上传的参考图"
         />
 
         <div className="liquid-card space-y-3 rounded-[18px] p-4">
