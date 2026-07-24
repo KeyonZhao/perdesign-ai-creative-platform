@@ -334,6 +334,11 @@ export function Gallery({
             setCustomEditorOpen(false);
             onGenerateScene(createCustomResult(request));
           }}
+          onGenerateDivergence={(request, divergenceRequest) => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+            onGenerateDivergence(createCustomResult(request), request.productName, divergenceRequest);
+          }}
           onError={onError}
           onSuccess={onSuccess}
         />

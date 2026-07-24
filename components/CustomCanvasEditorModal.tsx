@@ -3,9 +3,10 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, Sparkles, UploadCloud, Wand2, X } from "lucide-react";
+import { ChevronUp, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
+import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { downloadDataUrl, getGalleryDraggedImage } from "@/lib/image";
-import type { CustomCanvasGenerationRequest, GenerationStatus, UploadedImage } from "@/lib/types";
+import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage } from "@/lib/types";
 import { ImageSizeSelect } from "./ControlPanel";
 import { ImageUploader } from "./ImageUploader";
 
@@ -22,6 +23,10 @@ type CustomCanvasEditorModalProps = {
   onOpenLocalEdit: (request: CustomCanvasGenerationRequest) => void;
   onGenerateMultiView: (request: CustomCanvasGenerationRequest) => void;
   onGenerateScene: (request: CustomCanvasGenerationRequest) => void;
+  onGenerateDivergence: (
+    request: CustomCanvasGenerationRequest,
+    divergenceRequest: CreativeDivergenceRequest
+  ) => void;
   onError: (message: string) => void;
   onSuccess: (message: string) => void;
 };
@@ -36,10 +41,12 @@ export function CustomCanvasEditorModal({
   onOpenLocalEdit,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateDivergence,
   onError,
   onSuccess
 }: CustomCanvasEditorModalProps) {
   const sourceInputRef = useRef<HTMLInputElement | null>(null);
+  const divergenceFileInputRef = useRef<HTMLInputElement | null>(null);
   const stageShellRef = useRef<HTMLDivElement | null>(null);
   const [sourceImage, setSourceImage] = useState<UploadedImage | null>(initialSourceImage);
   const [sourceDimensions, setSourceDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -54,6 +61,10 @@ export function CustomCanvasEditorModal({
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [promptBeforeOptimization, setPromptBeforeOptimization] = useState<string | null>(null);
   const [awaitingAuthorization, setAwaitingAuthorization] = useState(false);
+  const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
+  const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
+  const [divergenceReference, setDivergenceReference] = useState<GenerationSourceImage | undefined>();
+  const [divergenceUploadError, setDivergenceUploadError] = useState("");
   const busy = status === "generating" || isOptimizing;
 
   useEffect(() => {
@@ -118,6 +129,34 @@ export function CustomCanvasEditorModal({
     }
   }
 
+  async function readDivergenceReference(file?: File) {
+    if (!file) return;
+    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+      setDivergenceUploadError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE) {
+      setDivergenceUploadError("风格参考图不能超过 10MB。");
+      return;
+    }
+
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("图片读取失败，请重试。"));
+        reader.readAsDataURL(file);
+      });
+      setDivergenceReference({ name: file.name || "风格参考图.png", dataUrl });
+      setDivergenceStyleIds([]);
+      setDivergenceUploadError("");
+    } catch (error) {
+      setDivergenceUploadError(error instanceof Error ? error.message : "图片读取失败，请重试。");
+    } finally {
+      if (divergenceFileInputRef.current) divergenceFileInputRef.current.value = "";
+    }
+  }
+
   function buildRequest(): CustomCanvasGenerationRequest | null {
     if (!sourceImage) {
       onError("请先上传需要编辑的图片。");
@@ -145,6 +184,15 @@ export function CustomCanvasEditorModal({
       count,
       size
     };
+  }
+
+  function submitDivergence() {
+    const request = getCurrentRequest();
+    if (!request || busy || (!divergenceStyleIds.length && !divergenceReference)) return;
+    onGenerateDivergence(request, {
+      styleIds: divergenceStyleIds,
+      referenceImage: divergenceReference
+    });
   }
 
   async function optimizePrompt() {
@@ -219,6 +267,19 @@ export function CustomCanvasEditorModal({
               <span>生成场景图</span>
             </button>
             <button
+              className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isDivergenceOpen ? "active" : ""}`}
+              onClick={() => setIsDivergenceOpen((current) => !current)}
+              onMouseEnter={() => {
+                if (sourceImage && !busy) setIsDivergenceOpen(true);
+              }}
+              disabled={!sourceImage || busy}
+              title="创意发散"
+              aria-expanded={isDivergenceOpen}
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>{status === "generating" ? "生成中" : "创意发散"}</span>
+            </button>
+            <button
               className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => {
                 if (!sourceImage) return;
@@ -236,6 +297,116 @@ export function CustomCanvasEditorModal({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {isDivergenceOpen ? (
+          <section className="divergence-panel" aria-label="创意发散设置">
+            <div className="divergence-panel-heading">
+              <div>
+                <strong>创意风格</strong>
+                <span>已选 {divergenceStyleIds.length}/4，或上传风格参考图</span>
+              </div>
+              <button
+                type="button"
+                className="divergence-panel-close"
+                onClick={() => setIsDivergenceOpen(false)}
+                title="收起"
+                aria-label="收起创意发散设置"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="divergence-style-grid" role="group" aria-label="创意风格多选">
+              {DIVERGENCE_STYLES.map((style) => {
+                const selected = divergenceStyleIds.includes(style.id);
+                const disabled = !selected && divergenceStyleIds.length >= 4;
+                return (
+                  <button
+                    key={style.id}
+                    type="button"
+                    className={`divergence-style-option ${selected ? "selected" : ""}`}
+                    onClick={() => {
+                      if (selected) {
+                        setDivergenceStyleIds((current) => current.filter((styleId) => styleId !== style.id));
+                      } else if (!disabled) {
+                        setDivergenceStyleIds((current) => [...current, style.id]);
+                      } else {
+                        setDivergenceUploadError("最多选择 4 种创意风格。");
+                        return;
+                      }
+                      setDivergenceReference(undefined);
+                      setDivergenceUploadError("");
+                    }}
+                    aria-pressed={selected}
+                    disabled={disabled}
+                    title={`${style.label}：${style.description}`}
+                  >
+                    {style.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="divergence-or"><span>或</span></div>
+
+            <input
+              ref={divergenceFileInputRef}
+              className="hidden"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => void readDivergenceReference(event.target.files?.[0])}
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+
+            {divergenceReference ? (
+              <div className="divergence-reference">
+                <img src={divergenceReference.dataUrl} alt="上传的风格参考图" />
+                <button
+                  type="button"
+                  className="divergence-reference-copy"
+                  onClick={() => divergenceFileInputRef.current?.click()}
+                >
+                  <strong>{divergenceReference.name}</strong>
+                  <span>风格参考图</span>
+                </button>
+                <button
+                  type="button"
+                  className="divergence-reference-remove"
+                  onClick={() => setDivergenceReference(undefined)}
+                  title="移除风格参考图"
+                  aria-label="移除风格参考图"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="divergence-upload"
+                onClick={() => divergenceFileInputRef.current?.click()}
+              >
+                <UploadCloud className="h-5 w-5" />
+                <span>
+                  <strong>上传风格图</strong>
+                  <small>PNG / JPG / WebP</small>
+                </span>
+              </button>
+            )}
+
+            {divergenceUploadError ? <p className="divergence-upload-error">{divergenceUploadError}</p> : null}
+
+            <button
+              type="button"
+              className="divergence-submit"
+              onClick={submitDivergence}
+              disabled={busy || (!divergenceStyleIds.length && !divergenceReference)}
+            >
+              {status === "generating" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+              <span>{status === "generating" ? "生成中" : "开始创意发散"}</span>
+            </button>
+          </section>
+        ) : null}
 
         <div className="image-preview-main custom-canvas-main">
           <div ref={stageShellRef} className="custom-canvas-stage-shell">

@@ -171,6 +171,7 @@ export function VentEditor() {
   const [params, setParams] = useState<VentParams>(defaults);
   const [gradientPoint, setGradientPoint] = useState({ x: 0.5, y: 0.5 });
   const [maskPosition, setMaskPosition] = useState<NormalizedPoint>({ x: 0.5, y: 0.5 });
+  const [maskScale, setMaskScale] = useState(1);
   const [maskSelected, setMaskSelected] = useState(false);
   const [maskSnapAxes, setMaskSnapAxes] = useState({ x: false, y: false });
   const [importedSvgShape, setImportedSvgShape] = useState<ImportedSvgShape | null>(null);
@@ -199,13 +200,13 @@ export function VentEditor() {
     [importedPanelShape, params]
   );
   const holes = useMemo(
-    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask, maskPosition, panelOutline),
-    [gradientPoint, importedSvgShape, maskPosition, panelOutline, params, pngMask]
+    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask, maskPosition, maskScale, panelOutline),
+    [gradientPoint, importedSvgShape, maskPosition, maskScale, panelOutline, params, pngMask]
   );
   const holePreviewPath = useMemo(() => buildHolePreviewPath(holes), [holes]);
   const maskBounds = useMemo(
-    () => (pngMask ? getPngMaskBounds(params, pngMask, maskPosition) : null),
-    [maskPosition, params, pngMask]
+    () => (pngMask ? getPngMaskBounds(params, pngMask, maskPosition, maskScale) : null),
+    [maskPosition, maskScale, params, pngMask]
   );
   const openArea = useMemo(() => holes.reduce((sum, item) => sum + itemArea(item), 0), [holes]);
   const panelArea = useMemo(() => polygonArea(panelOutline), [panelOutline]);
@@ -366,6 +367,7 @@ export function VentEditor() {
       const mask = await decodePngMask(file);
       setPngMask(mask);
       setMaskPosition({ x: 0.5, y: 0.5 });
+      setMaskScale(1);
       setMaskSelected(true);
       setMaskSnapAxes({ x: false, y: false });
     } catch (error) {
@@ -381,6 +383,7 @@ export function VentEditor() {
   function clearPngMask() {
     setPngMask(null);
     setMaskPosition({ x: 0.5, y: 0.5 });
+    setMaskScale(1);
     setMaskSelected(false);
     setMaskSnapAxes({ x: false, y: false });
     setPngMaskError("");
@@ -487,6 +490,31 @@ export function VentEditor() {
     setMaskPosition((current) => ({
       x: clamp(current.x + offset.x, 0, 1),
       y: clamp(current.y + offset.y, 0, 1)
+    }));
+  }
+
+  function zoomPngMask(event: React.WheelEvent<SVGSVGElement>) {
+    if (!pngMask) return;
+    const svg = previewRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const nextScale = clamp(maskScale * Math.exp(-event.deltaY * 0.0015), 0.15, 8);
+    if (Math.abs(nextScale - maskScale) < 0.0001) return;
+
+    const pointerX = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    const pointerY = clamp((event.clientY - rect.top) / rect.height, 0, 1);
+    const scaleRatio = nextScale / maskScale;
+
+    setMaskScale(nextScale);
+    setMaskSelected(true);
+    setMaskPosition((current) => ({
+      x: clamp(pointerX - (pointerX - current.x) * scaleRatio, 0, 1),
+      y: clamp(pointerY - (pointerY - current.y) * scaleRatio, 0, 1)
     }));
   }
 
@@ -831,6 +859,7 @@ export function VentEditor() {
             onClick={() => {
               setParams(defaults);
               setMaskPosition({ x: 0.5, y: 0.5 });
+              setMaskScale(1);
               setMaskSelected(false);
               setMaskSnapAxes({ x: false, y: false });
               setHoleDetailsOpen(false);
@@ -896,6 +925,7 @@ export function VentEditor() {
                 viewBox={`0 0 ${params.panelWidth} ${params.panelHeight}`}
                 role="img"
                 aria-label="网孔实时预览"
+                onWheel={zoomPngMask}
                 onPointerDown={(event) => {
                   setMarginSelected(false);
                   setMaskSelected(false);
@@ -907,7 +937,7 @@ export function VentEditor() {
                   <g
                     className={`vent-mask-positioner ${maskSelected ? "selected" : ""}`}
                     role="button"
-                    aria-label="图片蒙版位置，拖动可调整"
+                    aria-label="图片蒙版，拖动可移动，滚轮可缩放"
                     tabIndex={0}
                     onPointerDown={startMaskDragging}
                     onPointerMove={dragMask}
@@ -915,7 +945,7 @@ export function VentEditor() {
                     onPointerCancel={stopMaskDragging}
                     onKeyDown={moveMaskWithKeyboard}
                   >
-                    <title>拖动以移动图片蒙版</title>
+                    <title>拖动移动图片蒙版，使用鼠标滚轮缩放</title>
                     <rect
                       className="vent-mask-drag-surface"
                       x={maskBounds.x}
@@ -1674,6 +1704,7 @@ function createHoles(
   svgPoints?: Array<[number, number]>,
   pngMask?: PngMask | null,
   maskPosition: NormalizedPoint = { x: 0.5, y: 0.5 },
+  maskScale = 1,
   panelOutline = makePanelOutline(params)
 ) {
   if (params.holeShape === "svg" && !svgPoints?.length) return [];
@@ -1685,7 +1716,7 @@ function createHoles(
     const rotated = rotateAroundCenter(candidate.x, candidate.y, params, degrees(params.layoutRotation));
     const gradient = gradientValue(rotated.x, rotated.y, params, point);
     if (!densityKeep(rotated.x, rotated.y, candidate.row, candidate.column, gradient, params)) return;
-    const insideMask = pngMask ? pointInsidePngMask(rotated.x, rotated.y, params, pngMask, maskPosition) : false;
+    const insideMask = pngMask ? pointInsidePngMask(rotated.x, rotated.y, params, pngMask, maskPosition, maskScale) : false;
     if (pngMask && params.maskMode === "only" && !insideMask) return;
     if (pngMask && params.maskMode === "exclude" && insideMask) return;
 
@@ -1706,7 +1737,7 @@ function createHoles(
   return result;
 }
 
-function getPngMaskBounds(params: VentParams, mask: PngMask, position: NormalizedPoint) {
+function getPngMaskBounds(params: VentParams, mask: PngMask, position: NormalizedPoint, maskScale = 1) {
   const panelWidth = Math.max(1, params.panelWidth);
   const panelHeight = Math.max(1, params.panelHeight);
   let width = panelWidth;
@@ -1719,6 +1750,10 @@ function getPngMaskBounds(params: VentParams, mask: PngMask, position: Normalize
     width = mask.width * scale;
     height = mask.height * scale;
   }
+
+  const safeScale = clamp(maskScale, 0.15, 8);
+  width *= safeScale;
+  height *= safeScale;
 
   const centerX = clamp(position.x, 0, 1) * panelWidth;
   const centerY = clamp(position.y, 0, 1) * panelHeight;
@@ -1737,9 +1772,10 @@ function pointInsidePngMask(
   y: number,
   params: VentParams,
   mask: PngMask,
-  position: NormalizedPoint
+  position: NormalizedPoint,
+  maskScale = 1
 ) {
-  const bounds = getPngMaskBounds(params, mask, position);
+  const bounds = getPngMaskBounds(params, mask, position, maskScale);
   const normalizedX = (x - bounds.x) / Math.max(1e-6, bounds.width);
   const normalizedY = (y - bounds.y) / Math.max(1e-6, bounds.height);
   let inside = false;
