@@ -74,6 +74,11 @@ type PngMask = {
   usesAlpha: boolean;
 };
 
+type NormalizedPoint = {
+  x: number;
+  y: number;
+};
+
 const defaults: VentParams = {
   holeShape: "circle",
   layout: "grid",
@@ -161,6 +166,9 @@ const maskFitOptions: Array<{ value: MaskFit; label: string }> = [
 export function VentEditor() {
   const [params, setParams] = useState<VentParams>(defaults);
   const [gradientPoint, setGradientPoint] = useState({ x: 0.5, y: 0.5 });
+  const [maskPosition, setMaskPosition] = useState<NormalizedPoint>({ x: 0.5, y: 0.5 });
+  const [maskSelected, setMaskSelected] = useState(false);
+  const [maskSnapAxes, setMaskSnapAxes] = useState({ x: false, y: false });
   const [importedSvgShape, setImportedSvgShape] = useState<ImportedSvgShape | null>(null);
   const [svgImportError, setSvgImportError] = useState("");
   const [pngMask, setPngMask] = useState<PngMask | null>(null);
@@ -170,13 +178,22 @@ export function VentEditor() {
   const previewRef = useRef<SVGSVGElement | null>(null);
   const marginInputRef = useRef<HTMLInputElement | null>(null);
   const marginDraggingRef = useRef(false);
+  const maskDraggingRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startPosition: NormalizedPoint;
+  } | null>(null);
   const svgFileInputRef = useRef<HTMLInputElement | null>(null);
   const pngMaskInputRef = useRef<HTMLInputElement | null>(null);
 
   const panelOutline = useMemo(() => makePanelOutline(params), [params]);
   const holes = useMemo(
-    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask),
-    [gradientPoint, importedSvgShape, params, pngMask]
+    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask, maskPosition),
+    [gradientPoint, importedSvgShape, maskPosition, params, pngMask]
+  );
+  const maskBounds = useMemo(
+    () => (pngMask ? getPngMaskBounds(params, pngMask, maskPosition) : null),
+    [maskPosition, params, pngMask]
   );
   const openArea = useMemo(() => holes.reduce((sum, item) => sum + itemArea(item), 0), [holes]);
   const panelArea = useMemo(() => polygonArea(panelOutline), [panelOutline]);
@@ -241,8 +258,13 @@ export function VentEditor() {
     try {
       const mask = await decodePngMask(file);
       setPngMask(mask);
+      setMaskPosition({ x: 0.5, y: 0.5 });
+      setMaskSelected(true);
+      setMaskSnapAxes({ x: false, y: false });
     } catch (error) {
       setPngMask(null);
+      setMaskSelected(false);
+      setMaskSnapAxes({ x: false, y: false });
       setPngMaskError(error instanceof Error ? error.message : "无法读取这张 PNG 图片。");
     } finally {
       if (pngMaskInputRef.current) pngMaskInputRef.current.value = "";
@@ -251,6 +273,9 @@ export function VentEditor() {
 
   function clearPngMask() {
     setPngMask(null);
+    setMaskPosition({ x: 0.5, y: 0.5 });
+    setMaskSelected(false);
+    setMaskSnapAxes({ x: false, y: false });
     setPngMaskError("");
   }
 
@@ -278,6 +303,7 @@ export function VentEditor() {
 
   function startMarginEditing(event: React.PointerEvent<SVGGElement>) {
     event.stopPropagation();
+    setMaskSelected(false);
     setMarginSelected(true);
     marginDraggingRef.current = true;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -294,6 +320,67 @@ export function VentEditor() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+  }
+
+  function startMaskDragging(event: React.PointerEvent<SVGGElement>) {
+    event.stopPropagation();
+    setMarginSelected(false);
+    setMaskSelected(true);
+    setMaskSnapAxes({ x: false, y: false });
+    maskDraggingRef.current = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPosition: maskPosition
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function dragMask(event: React.PointerEvent<SVGGElement>) {
+    const drag = maskDraggingRef.current;
+    const svg = previewRef.current;
+    if (!drag || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const rawX = clamp(drag.startPosition.x + (event.clientX - drag.startClientX) / rect.width, 0, 1);
+    const rawY = clamp(drag.startPosition.y + (event.clientY - drag.startClientY) / rect.height, 0, 1);
+    const snapDistance = 18;
+    const snapX = Math.abs(rawX - 0.5) * rect.width <= snapDistance;
+    const snapY = Math.abs(rawY - 0.5) * rect.height <= snapDistance;
+    setMaskSnapAxes({ x: snapX, y: snapY });
+    setMaskPosition({
+      x: snapX ? 0.5 : rawX,
+      y: snapY ? 0.5 : rawY
+    });
+  }
+
+  function stopMaskDragging(event: React.PointerEvent<SVGGElement>) {
+    if (!maskDraggingRef.current) return;
+    maskDraggingRef.current = null;
+    setMaskSnapAxes({ x: false, y: false });
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function moveMaskWithKeyboard(event: React.KeyboardEvent<SVGGElement>) {
+    const movement = event.shiftKey ? 0.05 : 0.01;
+    const offsets: Partial<Record<string, NormalizedPoint>> = {
+      ArrowLeft: { x: -movement, y: 0 },
+      ArrowRight: { x: movement, y: 0 },
+      ArrowUp: { x: 0, y: -movement },
+      ArrowDown: { x: 0, y: movement }
+    };
+    const offset = offsets[event.key];
+    if (!offset) {
+      if (event.key === "Escape") setMaskSelected(false);
+      return;
+    }
+    event.preventDefault();
+    setMaskSelected(true);
+    setMaskPosition((current) => ({
+      x: clamp(current.x + offset.x, 0, 1),
+      y: clamp(current.y + offset.y, 0, 1)
+    }));
   }
 
   function exportSvg() {
@@ -586,6 +673,9 @@ export function VentEditor() {
             className="vent-reset-button"
             onClick={() => {
               setParams(defaults);
+              setMaskPosition({ x: 0.5, y: 0.5 });
+              setMaskSelected(false);
+              setMaskSnapAxes({ x: false, y: false });
               setHoleDetailsOpen(false);
             }}
           >
@@ -680,10 +770,43 @@ export function VentEditor() {
                 aria-label="网孔实时预览"
                 onPointerDown={(event) => {
                   setMarginSelected(false);
+                  setMaskSelected(false);
                   updateGradientPoint(event);
                 }}
               >
                 <polygon points={pointsAttribute(panelOutline)} fill="none" stroke="#74747c" strokeWidth={0.45} />
+                {pngMask && maskBounds ? (
+                  <g
+                    className={`vent-mask-positioner ${maskSelected ? "selected" : ""}`}
+                    role="button"
+                    aria-label="图片蒙版位置，拖动可调整"
+                    tabIndex={0}
+                    onPointerDown={startMaskDragging}
+                    onPointerMove={dragMask}
+                    onPointerUp={stopMaskDragging}
+                    onPointerCancel={stopMaskDragging}
+                    onKeyDown={moveMaskWithKeyboard}
+                  >
+                    <title>拖动以移动图片蒙版</title>
+                    <rect
+                      className="vent-mask-drag-surface"
+                      x={maskBounds.x}
+                      y={maskBounds.y}
+                      width={maskBounds.width}
+                      height={maskBounds.height}
+                      rx={Math.min(params.panelWidth, params.panelHeight) * 0.008}
+                    />
+                    <g
+                      className="vent-mask-center-handle"
+                      transform={`translate(${maskBounds.centerX} ${maskBounds.centerY})`}
+                    >
+                      <circle r={Math.min(params.panelWidth, params.panelHeight) * 0.018} />
+                      <path
+                        d={`M ${-Math.min(params.panelWidth, params.panelHeight) * 0.01} 0 H ${Math.min(params.panelWidth, params.panelHeight) * 0.01} M 0 ${-Math.min(params.panelWidth, params.panelHeight) * 0.01} V ${Math.min(params.panelWidth, params.panelHeight) * 0.01}`}
+                      />
+                    </g>
+                  </g>
+                ) : null}
                 <g
                   className={`vent-safety-outline ${marginSelected ? "selected" : ""}`}
                   role="button"
@@ -717,7 +840,7 @@ export function VentEditor() {
                     strokeDasharray="1.2 1.2"
                   />
                 </g>
-                <g fill="#8b8b93">
+                <g fill="#8b8b93" pointerEvents="none">
                   {holes.map((item, index) =>
                     item.kind === "circle" ? (
                       <circle key={index} cx={item.x} cy={item.y} r={item.size / 2} />
@@ -726,6 +849,29 @@ export function VentEditor() {
                     )
                   )}
                 </g>
+                {pngMask && (maskSnapAxes.x || maskSnapAxes.y) ? (
+                  <g className="vent-mask-snap-guides" aria-hidden="true">
+                    {maskSnapAxes.x ? (
+                      <line
+                        className="vertical"
+                        x1={params.panelWidth / 2}
+                        y1={0}
+                        x2={params.panelWidth / 2}
+                        y2={params.panelHeight}
+                      />
+                    ) : null}
+                    {maskSnapAxes.y ? (
+                      <line
+                        className="horizontal"
+                        x1={0}
+                        y1={params.panelHeight / 2}
+                        x2={params.panelWidth}
+                        y2={params.panelHeight / 2}
+                      />
+                    ) : null}
+                    <circle cx={params.panelWidth / 2} cy={params.panelHeight / 2} r={Math.min(params.panelWidth, params.panelHeight) * 0.01} />
+                  </g>
+                ) : null}
                 {params.gradient === "point" ? (
                   <g className="vent-gradient-handle" transform={`translate(${gradientPoint.x * params.panelWidth} ${gradientPoint.y * params.panelHeight})`}>
                     <circle r={2.3} fill="none" stroke="#5b43ff" strokeWidth={0.65} />
@@ -1243,7 +1389,8 @@ function createHoles(
   params: VentParams,
   point: { x: number; y: number },
   svgPoints?: Array<[number, number]>,
-  pngMask?: PngMask | null
+  pngMask?: PngMask | null,
+  maskPosition: NormalizedPoint = { x: 0.5, y: 0.5 }
 ) {
   if (params.holeShape === "svg" && !svgPoints?.length) return [];
   const candidates = createLayoutCandidates(params);
@@ -1253,7 +1400,7 @@ function createHoles(
     const rotated = rotateAroundCenter(candidate.x, candidate.y, params, degrees(params.layoutRotation));
     const gradient = gradientValue(rotated.x, rotated.y, params, point);
     if (!densityKeep(rotated.x, rotated.y, candidate.row, candidate.column, gradient, params)) return;
-    const insideMask = pngMask ? pointInsidePngMask(rotated.x, rotated.y, params, pngMask) : false;
+    const insideMask = pngMask ? pointInsidePngMask(rotated.x, rotated.y, params, pngMask, maskPosition) : false;
     if (pngMask && params.maskMode === "only" && !insideMask) return;
     if (pngMask && params.maskMode === "exclude" && insideMask) return;
 
@@ -1275,34 +1422,42 @@ function createHoles(
   return result;
 }
 
-function pointInsidePngMask(x: number, y: number, params: VentParams, mask: PngMask) {
+function getPngMaskBounds(params: VentParams, mask: PngMask, position: NormalizedPoint) {
   const panelWidth = Math.max(1, params.panelWidth);
   const panelHeight = Math.max(1, params.panelHeight);
-  let normalizedX = x / panelWidth;
-  let normalizedY = y / panelHeight;
+  let width = panelWidth;
+  let height = panelHeight;
 
   if (params.maskFit !== "stretch") {
-    const imageAspect = mask.width / mask.height;
-    const panelAspect = panelWidth / panelHeight;
-    if (params.maskFit === "contain") {
-      if (imageAspect > panelAspect) {
-        const renderedHeight = panelAspect / imageAspect;
-        const offset = (1 - renderedHeight) / 2;
-        normalizedY = (normalizedY - offset) / renderedHeight;
-      } else {
-        const renderedWidth = imageAspect / panelAspect;
-        const offset = (1 - renderedWidth) / 2;
-        normalizedX = (normalizedX - offset) / renderedWidth;
-      }
-    } else if (imageAspect > panelAspect) {
-      const visibleWidth = panelAspect / imageAspect;
-      normalizedX = normalizedX * visibleWidth + (1 - visibleWidth) / 2;
-    } else {
-      const visibleHeight = imageAspect / panelAspect;
-      normalizedY = normalizedY * visibleHeight + (1 - visibleHeight) / 2;
-    }
+    const scale = params.maskFit === "contain"
+      ? Math.min(panelWidth / mask.width, panelHeight / mask.height)
+      : Math.max(panelWidth / mask.width, panelHeight / mask.height);
+    width = mask.width * scale;
+    height = mask.height * scale;
   }
 
+  const centerX = clamp(position.x, 0, 1) * panelWidth;
+  const centerY = clamp(position.y, 0, 1) * panelHeight;
+  return {
+    x: centerX - width / 2,
+    y: centerY - height / 2,
+    width,
+    height,
+    centerX,
+    centerY
+  };
+}
+
+function pointInsidePngMask(
+  x: number,
+  y: number,
+  params: VentParams,
+  mask: PngMask,
+  position: NormalizedPoint
+) {
+  const bounds = getPngMaskBounds(params, mask, position);
+  const normalizedX = (x - bounds.x) / Math.max(1e-6, bounds.width);
+  const normalizedY = (y - bounds.y) / Math.max(1e-6, bounds.height);
   let inside = false;
   if (normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1) {
     const pixelX = clamp(Math.round(normalizedX * (mask.width - 1)), 0, mask.width - 1);

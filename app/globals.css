@@ -2965,6 +2965,77 @@ textarea {
   cursor: crosshair;
 }
 
+.vent-mask-positioner {
+  cursor: grab;
+  outline: none;
+}
+
+.vent-mask-positioner:active {
+  cursor: grabbing;
+}
+
+.vent-mask-drag-surface {
+  fill: rgba(106, 87, 255, 0.018);
+  stroke: rgba(136, 121, 255, 0.28);
+  stroke-width: 0.24;
+  stroke-dasharray: 1.3 1.3;
+  vector-effect: non-scaling-stroke;
+  transition: fill 140ms ease, stroke 140ms ease, filter 140ms ease;
+}
+
+.vent-mask-positioner:hover .vent-mask-drag-surface,
+.vent-mask-positioner.selected .vent-mask-drag-surface {
+  fill: rgba(106, 87, 255, 0.055);
+  stroke: rgba(153, 139, 255, 0.78);
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 2px rgba(101, 78, 255, 0.68));
+}
+
+.vent-mask-center-handle {
+  pointer-events: none;
+  opacity: 0.68;
+  transition: opacity 140ms ease;
+}
+
+.vent-mask-positioner:hover .vent-mask-center-handle,
+.vent-mask-positioner.selected .vent-mask-center-handle {
+  opacity: 1;
+}
+
+.vent-mask-center-handle circle {
+  fill: rgba(22, 21, 28, 0.82);
+  stroke: rgba(153, 139, 255, 0.94);
+  stroke-width: 0.28;
+  vector-effect: non-scaling-stroke;
+}
+
+.vent-mask-center-handle path {
+  fill: none;
+  stroke: #c8c0ff;
+  stroke-width: 0.28;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.vent-mask-snap-guides {
+  pointer-events: none;
+  filter: drop-shadow(0 0 2.4px rgba(102, 79, 255, 0.9));
+}
+
+.vent-mask-snap-guides line {
+  stroke: rgba(158, 143, 255, 0.96);
+  stroke-width: 0.34;
+  stroke-dasharray: 1.2 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.vent-mask-snap-guides circle {
+  fill: rgba(121, 100, 255, 0.92);
+  stroke: rgba(221, 216, 255, 0.9);
+  stroke-width: 0.22;
+  vector-effect: non-scaling-stroke;
+}
+
 .vent-safety-outline {
   cursor: grab;
   outline: none;
