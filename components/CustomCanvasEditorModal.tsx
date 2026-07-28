@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronUp, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
+import { Box, ChevronUp, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { downloadDataUrl, getGalleryDraggedImage } from "@/lib/image";
 import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage } from "@/lib/types";
@@ -23,6 +23,8 @@ type CustomCanvasEditorModalProps = {
   onOpenLocalEdit: (request: CustomCanvasGenerationRequest) => void;
   onGenerateMultiView: (request: CustomCanvasGenerationRequest) => void;
   onGenerateScene: (request: CustomCanvasGenerationRequest) => void;
+  onGenerateEcommercePoster: (request: CustomCanvasGenerationRequest, instruction?: string) => void;
+  onOpenModelPanel: (request: CustomCanvasGenerationRequest) => void;
   onGenerateDivergence: (
     request: CustomCanvasGenerationRequest,
     divergenceRequest: CreativeDivergenceRequest
@@ -41,12 +43,15 @@ export function CustomCanvasEditorModal({
   onOpenLocalEdit,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateEcommercePoster,
+  onOpenModelPanel,
   onGenerateDivergence,
   onError,
   onSuccess
 }: CustomCanvasEditorModalProps) {
   const sourceInputRef = useRef<HTMLInputElement | null>(null);
   const divergenceFileInputRef = useRef<HTMLInputElement | null>(null);
+  const ecommercePanelCloseTimerRef = useRef<number | null>(null);
   const stageShellRef = useRef<HTMLDivElement | null>(null);
   const [sourceImage, setSourceImage] = useState<UploadedImage | null>(initialSourceImage);
   const [sourceDimensions, setSourceDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -62,10 +67,31 @@ export function CustomCanvasEditorModal({
   const [promptBeforeOptimization, setPromptBeforeOptimization] = useState<string | null>(null);
   const [awaitingAuthorization, setAwaitingAuthorization] = useState(false);
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
+  const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
+  const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
   const [divergenceReference, setDivergenceReference] = useState<GenerationSourceImage | undefined>();
   const [divergenceUploadError, setDivergenceUploadError] = useState("");
   const busy = status === "generating" || isOptimizing;
+
+  function keepEcommercePanelOpen() {
+    if (ecommercePanelCloseTimerRef.current !== null) {
+      window.clearTimeout(ecommercePanelCloseTimerRef.current);
+      ecommercePanelCloseTimerRef.current = null;
+    }
+    setIsDivergenceOpen(false);
+    setIsEcommercePanelOpen(true);
+  }
+
+  function scheduleEcommercePanelClose() {
+    if (ecommercePanelCloseTimerRef.current !== null) {
+      window.clearTimeout(ecommercePanelCloseTimerRef.current);
+    }
+    ecommercePanelCloseTimerRef.current = window.setTimeout(() => {
+      setIsEcommercePanelOpen(false);
+      ecommercePanelCloseTimerRef.current = null;
+    }, 140);
+  }
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -75,6 +101,12 @@ export function CustomCanvasEditorModal({
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
+
+  useEffect(() => () => {
+    if (ecommercePanelCloseTimerRef.current !== null) {
+      window.clearTimeout(ecommercePanelCloseTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (awaitingAuthorization && status === "generating") onClose();
@@ -267,10 +299,28 @@ export function CustomCanvasEditorModal({
               <span>生成场景图</span>
             </button>
             <button
+              className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isEcommercePanelOpen ? "active" : ""}`}
+              onClick={keepEcommercePanelOpen}
+              onMouseEnter={keepEcommercePanelOpen}
+              onMouseLeave={scheduleEcommercePanelClose}
+              disabled={!sourceImage || busy}
+              title="生成电商长图"
+              aria-expanded={isEcommercePanelOpen}
+            >
+              <ShoppingBag className="h-4 w-4" />
+              <span>生成电商长图</span>
+            </button>
+            <button
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isDivergenceOpen ? "active" : ""}`}
-              onClick={() => setIsDivergenceOpen((current) => !current)}
+              onClick={() => {
+                setIsEcommercePanelOpen(false);
+                setIsDivergenceOpen((current) => !current);
+              }}
               onMouseEnter={() => {
-                if (sourceImage && !busy) setIsDivergenceOpen(true);
+                if (sourceImage && !busy) {
+                  setIsEcommercePanelOpen(false);
+                  setIsDivergenceOpen(true);
+                }
               }}
               disabled={!sourceImage || busy}
               title="创意发散"
@@ -278,6 +328,19 @@ export function CustomCanvasEditorModal({
             >
               <Sparkles className="h-4 w-4" />
               <span>{status === "generating" ? "生成中" : "创意发散"}</span>
+            </button>
+            <button
+              className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => {
+                const request = getCurrentRequest();
+                if (!request) return;
+                onOpenModelPanel(request);
+              }}
+              disabled={!sourceImage || busy}
+              title="生成3D模型"
+            >
+              <Box className="h-4 w-4" />
+              <span>生成3D模型</span>
             </button>
             <button
               className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
@@ -297,6 +360,58 @@ export function CustomCanvasEditorModal({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {isEcommercePanelOpen ? (
+          <section
+            className="ecommerce-poster-panel"
+            aria-label="电商长图设置"
+            onMouseEnter={keepEcommercePanelOpen}
+            onMouseLeave={scheduleEcommercePanelClose}
+          >
+            <div className="ecommerce-poster-panel-heading">
+              <div>
+                <strong>生成电商长图</strong>
+                <span>补充希望重点呈现的卖点、场景、细节或使用方式</span>
+              </div>
+              <button
+                type="button"
+                className="divergence-panel-close"
+                onClick={() => setIsEcommercePanelOpen(false)}
+                title="收起"
+                aria-label="收起电商长图设置"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </button>
+            </div>
+            <textarea
+              className="ecommerce-poster-instruction"
+              value={ecommerceInstruction}
+              onChange={(event) => setEcommerceInstruction(event.target.value)}
+              placeholder="例如：重点展示户外使用场景、旋钮操作和防滑细节，整体使用冷灰色科技风。"
+              maxLength={600}
+              rows={4}
+              autoFocus
+            />
+            <div className="ecommerce-poster-panel-footer">
+              <span>{ecommerceInstruction.length}/600</span>
+              <button
+                type="button"
+                className="ecommerce-poster-submit"
+                onClick={() => {
+                  const request = getCurrentRequest();
+                  if (!request) return;
+                  onGenerateEcommercePoster(request, ecommerceInstruction.trim());
+                }}
+                disabled={busy}
+              >
+                {status === "generating"
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <SendHorizontal className="h-4 w-4" />}
+                <span>{status === "generating" ? "生成中" : "生成长图"}</span>
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         {isDivergenceOpen ? (
           <section className="divergence-panel" aria-label="创意发散设置">

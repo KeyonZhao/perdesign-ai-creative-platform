@@ -25,6 +25,7 @@ type ImagePreviewModalProps = {
   onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) => void;
   onModelGenerated?: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
   startEditing?: boolean;
+  startModelPanel?: boolean;
   metadata?: GenerationMetadata | null;
   result: GenerationResult | null;
   onClose: () => void;
@@ -59,6 +60,7 @@ export function ImagePreviewModal({
   onLocalEdit,
   onModelGenerated,
   startEditing = false,
+  startModelPanel = false,
   metadata,
   isGeneratingVariant = false,
   isGeneratingDesignDescription = false
@@ -141,7 +143,7 @@ export function ImagePreviewModal({
     setHasCopiedDescription(false);
     setIsSourceDescriptionExpanded(false);
     setSelectedDivergenceQuadrant(null);
-    setIsModelPanelOpen(false);
+    setIsModelPanelOpen(startModelPanel);
     setModelViews({});
     setModelViewUploadError("");
     setIsModelViewerOpen(false);
@@ -151,7 +153,7 @@ export function ImagePreviewModal({
     setModelBlob(undefined);
     setModelTaskId("");
     setModelGenerationError("");
-  }, [result?.designDescription, result?.id, startEditing]);
+  }, [result?.designDescription, result?.id, startEditing, startModelPanel]);
 
   useEffect(() => () => modelRequestAbortRef.current?.abort(), []);
 

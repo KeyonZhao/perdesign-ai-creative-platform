@@ -84,6 +84,7 @@ export function Gallery({
   const [modelPreview, setModelPreview] = useState<GenerationResult | null>(null);
   const [previewMetadata, setPreviewMetadata] = useState<GenerationMetadata | null>(null);
   const [previewStartsEditing, setPreviewStartsEditing] = useState(false);
+  const [previewStartsModel, setPreviewStartsModel] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [customEditorOpen, setCustomEditorOpen] = useState(false);
   const [customSourceImage, setCustomSourceImage] = useState<UploadedImage | null>(null);
@@ -202,12 +203,14 @@ export function Gallery({
                         index={startIndex + index}
                         onPreview={(selectedResult) => {
                           setPreviewStartsEditing(false);
+                          setPreviewStartsModel(false);
                           setPreviewMetadata(batch.metadata || null);
                           setPreview(selectedResult);
                         }}
                         onPreviewModel={setModelPreview}
                         onEdit={(selectedResult) => {
                           setPreviewStartsEditing(true);
+                          setPreviewStartsModel(false);
                           setPreviewMetadata(batch.metadata || null);
                           setPreview(selectedResult);
                         }}
@@ -267,10 +270,12 @@ export function Gallery({
         result={preview}
         metadata={previewMetadata}
         startEditing={previewStartsEditing}
+        startModelPanel={previewStartsModel}
         onClose={() => {
           setPreview(null);
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
+          setPreviewStartsModel(false);
         }}
         onGenerateMultiView={(result) => {
           onGenerateMultiView(result);
@@ -346,6 +351,7 @@ export function Gallery({
           onOpenLocalEdit={(request) => {
             setCustomEditorOpen(false);
             setPreviewStartsEditing(true);
+            setPreviewStartsModel(false);
             setPreviewMetadata(createCustomMetadata(request));
             setPreview(createCustomResult(request));
           }}
@@ -356,6 +362,19 @@ export function Gallery({
           onGenerateScene={(request) => {
             setCustomEditorOpen(false);
             onGenerateScene(createCustomResult(request));
+          }}
+          onGenerateEcommercePoster={(request, instruction) => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+            onGenerateEcommercePoster(createCustomResult(request), request.productName, instruction);
+          }}
+          onOpenModelPanel={(request) => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+            setPreviewStartsEditing(false);
+            setPreviewStartsModel(true);
+            setPreviewMetadata(createCustomMetadata(request));
+            setPreview(createCustomResult(request));
           }}
           onGenerateDivergence={(request, divergenceRequest) => {
             setCustomEditorOpen(false);

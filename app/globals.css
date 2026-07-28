@@ -468,7 +468,7 @@ textarea {
   align-items: center;
   justify-content: center;
   border: 1px dashed rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
+  border-radius: 24px;
   background: rgba(255, 255, 255, 0.018);
   color: #ffffff;
   transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
