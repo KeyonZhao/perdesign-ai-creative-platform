@@ -4,7 +4,7 @@ import type { GenerationResult } from "./types";
 
 export async function downloadResultsZip(results: GenerationResult[]) {
   const zip = new JSZip();
-  const validImages = results.filter((result) => result.imageBase64);
+  const validImages = results.filter((result) => result.assetType !== "model3d" && result.imageBase64);
 
   validImages.forEach((result, index) => {
     const base64 = result.imageBase64!.split(",")[1];

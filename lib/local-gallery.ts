@@ -5,8 +5,9 @@ const DATABASE_NAME = "perdesign-local-gallery";
 const DATABASE_VERSION = 1;
 const BATCH_STORE = "generation-batches";
 
-type StoredGenerationResult = Omit<GenerationResult, "imageBase64"> & {
+type StoredGenerationResult = Omit<GenerationResult, "imageBase64" | "modelBlob"> & {
   imageBlob?: Blob;
+  modelBlob?: Blob;
 };
 
 type StoredGenerationSourceImage = Omit<GenerationSourceImage, "dataUrl"> & {
@@ -102,7 +103,10 @@ export async function getLocalGalleryStats(): Promise<LocalGalleryStats> {
       savedBytes: records.reduce(
         (sum, batch) =>
           sum +
-          batch.results.reduce((batchSum, result) => batchSum + (result.imageBlob?.size || 0), 0) +
+          batch.results.reduce(
+            (batchSum, result) => batchSum + (result.imageBlob?.size || 0) + (result.modelBlob?.size || 0),
+            0
+          ) +
           (batch.metadata?.sketchImage?.imageBlob.size || 0) +
           (batch.metadata?.productImage?.imageBlob.size || 0) +
           (batch.metadata?.referenceImage?.imageBlob.size || 0) +
@@ -143,9 +147,10 @@ async function storeBatch(batch: GenerationBatch, createdAt: number): Promise<St
         }
       : undefined,
     results: await Promise.all(
-      batch.results.map(async ({ imageBase64, ...result }) => ({
+      batch.results.map(async ({ imageBase64, modelBlob, ...result }) => ({
         ...result,
-        imageBlob: imageBase64 ? dataUrlToBlob(imageBase64) : undefined
+        imageBlob: imageBase64 ? dataUrlToBlob(imageBase64) : undefined,
+        modelBlob
       }))
     )
   };
@@ -170,9 +175,10 @@ async function restoreBatch(batch: StoredGenerationBatch): Promise<GenerationBat
         }
       : undefined,
     results: await Promise.all(
-      batch.results.map(async ({ imageBlob, ...result }) => ({
+      batch.results.map(async ({ imageBlob, modelBlob, ...result }) => ({
         ...result,
-        imageBase64: imageBlob ? await blobToDataUrl(imageBlob) : undefined
+        imageBase64: imageBlob ? await blobToDataUrl(imageBlob) : undefined,
+        modelBlob
       }))
     )
   };

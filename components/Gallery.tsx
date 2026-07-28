@@ -10,6 +10,7 @@ import { CustomCanvasEditorModal } from "./CustomCanvasEditorModal";
 import { ImagePreviewModal } from "./ImagePreviewModal";
 import { LocalHistoryModal } from "./LocalHistoryModal";
 import { ResultCard } from "./ResultCard";
+import { TripoModelViewer } from "./TripoModelViewer";
 
 type GalleryProps = {
   isActive: boolean;
@@ -20,6 +21,7 @@ type GalleryProps = {
   count: number;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
+  onGenerateEcommercePoster: (result: GenerationResult, productName?: string, instruction?: string) => void;
   onGenerateDivergence: (
     result: GenerationResult,
     productName: string | undefined,
@@ -27,6 +29,7 @@ type GalleryProps = {
   ) => void;
   onGenerateFromPrompt: (result: GenerationResult, instruction: string, referenceImages?: GenerationSourceImage[]) => void;
   onGenerateDesignDescription: (result: GenerationResult) => Promise<string>;
+  onModelGenerated: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
   designDescriptionLoadingIds: string[];
   onLocalEdit: (
     result: GenerationResult,
@@ -58,9 +61,11 @@ export function Gallery({
   onSuccess,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateEcommercePoster,
   onGenerateDivergence,
   onGenerateFromPrompt,
   onGenerateDesignDescription,
+  onModelGenerated,
   designDescriptionLoadingIds,
   onLocalEdit,
   onGenerateCustom,
@@ -76,6 +81,7 @@ export function Gallery({
   isGeneratingVariant = false
 }: GalleryProps) {
   const [preview, setPreview] = useState<GenerationResult | null>(null);
+  const [modelPreview, setModelPreview] = useState<GenerationResult | null>(null);
   const [previewMetadata, setPreviewMetadata] = useState<GenerationMetadata | null>(null);
   const [previewStartsEditing, setPreviewStartsEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -199,6 +205,7 @@ export function Gallery({
                           setPreviewMetadata(batch.metadata || null);
                           setPreview(selectedResult);
                         }}
+                        onPreviewModel={setModelPreview}
                         onEdit={(selectedResult) => {
                           setPreviewStartsEditing(true);
                           setPreviewMetadata(batch.metadata || null);
@@ -277,6 +284,12 @@ export function Gallery({
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
         }}
+        onGenerateEcommercePoster={(result, instruction) => {
+          onGenerateEcommercePoster(result, previewMetadata?.productName, instruction);
+          setPreview(null);
+          setPreviewMetadata(null);
+          setPreviewStartsEditing(false);
+        }}
         onGenerateDivergence={(result, productName, request) => {
           onGenerateDivergence(result, productName, request);
           setPreview(null);
@@ -290,6 +303,7 @@ export function Gallery({
           setPreviewStartsEditing(false);
         }}
         onGenerateDesignDescription={onGenerateDesignDescription}
+        onModelGenerated={onModelGenerated}
         isGeneratingDesignDescription={Boolean(preview && designDescriptionLoadingIds.includes(preview.id))}
         onLocalEdit={(result, maskImageBase64, instruction, guideImageBase64) => {
           onLocalEdit(result, maskImageBase64, instruction, guideImageBase64);
@@ -298,6 +312,15 @@ export function Gallery({
           setPreviewStartsEditing(false);
         }}
         isGeneratingVariant={isGeneratingVariant}
+      />
+      <TripoModelViewer
+        open={Boolean(modelPreview)}
+        phase="success"
+        progress={100}
+        modelBlob={modelPreview?.modelBlob}
+        modelTaskId={modelPreview?.modelTaskId}
+        filename={modelPreview?.title.trim().replace(/\s+/g, "-").toLowerCase() || "perdesign-model"}
+        onClose={() => setModelPreview(null)}
       />
       <LocalHistoryModal
         open={historyOpen}

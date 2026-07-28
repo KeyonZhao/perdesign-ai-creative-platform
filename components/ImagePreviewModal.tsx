@@ -3,16 +3,18 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Check, ChevronDown, ChevronUp, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
+import { Box, Check, ChevronDown, ChevronUp, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import type { CreativeDivergenceRequest, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
+import { TripoModelViewer } from "./TripoModelViewer";
 
 type ImagePreviewModalProps = {
   isGeneratingVariant?: boolean;
   isGeneratingDesignDescription?: boolean;
   onGenerateMultiView?: (result: GenerationResult) => void;
   onGenerateScene?: (result: GenerationResult) => void;
+  onGenerateEcommercePoster?: (result: GenerationResult, instruction?: string) => void;
   onGenerateDivergence?: (
     result: GenerationResult,
     productName: string | undefined,
@@ -21,6 +23,7 @@ type ImagePreviewModalProps = {
   onGenerateFromPrompt?: (result: GenerationResult, instruction: string, referenceImages?: GenerationSourceImage[]) => void;
   onGenerateDesignDescription?: (result: GenerationResult) => Promise<string>;
   onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) => void;
+  onModelGenerated?: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
   startEditing?: boolean;
   metadata?: GenerationMetadata | null;
   result: GenerationResult | null;
@@ -29,8 +32,15 @@ type ImagePreviewModalProps = {
 
 type PaintTool = "brush" | "eraser";
 type MaskSnapshot = { imageData: ImageData; hadMask: boolean };
+type ModelGenerationPhase = "idle" | "uploading" | "generating" | "success" | "error";
+type ModelViewKey = "left" | "back" | "right";
 type DivergenceQuadrantPosition = "左上" | "右上" | "左下" | "右下";
 const DIVERGENCE_QUADRANTS: DivergenceQuadrantPosition[] = ["左上", "右上", "左下", "右下"];
+const MODEL_VIEW_OPTIONS: Array<{ key: ModelViewKey; label: string }> = [
+  { key: "left", label: "左视图" },
+  { key: "back", label: "后视图" },
+  { key: "right", label: "右视图" }
+];
 const LEGACY_SCENE_PROMPT = "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图";
 const LEGACY_MULTI_VIEW_PROMPT =
   "生成这个产品的多视角图片，画面最右侧是产品的斜侧透视图，左侧包含产品正视图、左视图、后视图、顶视图。";
@@ -42,10 +52,12 @@ export function ImagePreviewModal({
   onClose,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateEcommercePoster,
   onGenerateDivergence,
   onGenerateFromPrompt,
   onGenerateDesignDescription,
   onLocalEdit,
+  onModelGenerated,
   startEditing = false,
   metadata,
   isGeneratingVariant = false,
@@ -55,6 +67,15 @@ export function ImagePreviewModal({
   const brushCursorRef = useRef<HTMLDivElement | null>(null);
   const imagePromptFileInputRef = useRef<HTMLInputElement | null>(null);
   const divergenceFileInputRef = useRef<HTMLInputElement | null>(null);
+  const divergenceCloseTimerRef = useRef<number | null>(null);
+  const isDivergenceFileDialogOpenRef = useRef(false);
+  const ecommercePanelCloseTimerRef = useRef<number | null>(null);
+  const modelViewFileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingModelViewRef = useRef<ModelViewKey>("left");
+  const hoveredModelViewRef = useRef<ModelViewKey | null>(null);
+  const readModelViewRef = useRef<(file?: File) => Promise<void>>(async () => {});
+  const modelPanelCloseTimerRef = useRef<number | null>(null);
+  const modelRequestAbortRef = useRef<AbortController | null>(null);
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const historyRef = useRef<MaskSnapshot[]>([]);
@@ -67,9 +88,12 @@ export function ImagePreviewModal({
   const [imagePrompt, setImagePrompt] = useState("");
   const [imagePromptReferences, setImagePromptReferences] = useState<GenerationSourceImage[]>([]);
   const [imagePromptUploadError, setImagePromptUploadError] = useState("");
+  const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
+  const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
   const [divergenceReference, setDivergenceReference] = useState<GenerationSourceImage | undefined>();
+  const [divergenceReferenceWeight, setDivergenceReferenceWeight] = useState(50);
   const [divergenceUploadError, setDivergenceUploadError] = useState("");
   const [hasMask, setHasMask] = useState(false);
   const [historyCount, setHistoryCount] = useState(0);
@@ -79,19 +103,35 @@ export function ImagePreviewModal({
   const [isSourceDescriptionExpanded, setIsSourceDescriptionExpanded] = useState(false);
   const [selectedDivergenceQuadrant, setSelectedDivergenceQuadrant] =
     useState<DivergenceQuadrantPosition | null>(null);
+  const [isModelPanelOpen, setIsModelPanelOpen] = useState(false);
+  const [modelViews, setModelViews] = useState<Partial<Record<ModelViewKey, GenerationSourceImage>>>({});
+  const [modelViewUploadError, setModelViewUploadError] = useState("");
+  const [isModelViewerOpen, setIsModelViewerOpen] = useState(false);
+  const [modelGenerationPhase, setModelGenerationPhase] = useState<ModelGenerationPhase>("idle");
+  const [modelProgress, setModelProgress] = useState(0);
+  const [modelUrl, setModelUrl] = useState("");
+  const [modelBlob, setModelBlob] = useState<Blob | undefined>();
+  const [modelTaskId, setModelTaskId] = useState("");
+  const [modelGenerationError, setModelGenerationError] = useState("");
 
   activeResultIdRef.current = result?.id;
+  readModelViewRef.current = readModelView;
 
   useEffect(() => {
+    modelRequestAbortRef.current?.abort();
+    modelRequestAbortRef.current = null;
     setIsEditing(startEditing);
     setPaintTool("brush");
     setInstruction("");
     setImagePrompt("");
     setImagePromptReferences([]);
     setImagePromptUploadError("");
+    setIsEcommercePanelOpen(false);
+    setEcommerceInstruction("");
     setIsDivergenceOpen(false);
     setDivergenceStyleIds([]);
     setDivergenceReference(undefined);
+    setDivergenceReferenceWeight(50);
     setDivergenceUploadError("");
     setHasMask(false);
     historyRef.current = [];
@@ -101,7 +141,127 @@ export function ImagePreviewModal({
     setHasCopiedDescription(false);
     setIsSourceDescriptionExpanded(false);
     setSelectedDivergenceQuadrant(null);
+    setIsModelPanelOpen(false);
+    setModelViews({});
+    setModelViewUploadError("");
+    setIsModelViewerOpen(false);
+    setModelGenerationPhase("idle");
+    setModelProgress(0);
+    setModelUrl("");
+    setModelBlob(undefined);
+    setModelTaskId("");
+    setModelGenerationError("");
   }, [result?.designDescription, result?.id, startEditing]);
+
+  useEffect(() => () => modelRequestAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!isModelPanelOpen) hoveredModelViewRef.current = null;
+
+    function handleModelViewPaste(event: ClipboardEvent) {
+      const hoveredView = hoveredModelViewRef.current;
+      if (!isModelPanelOpen || !hoveredView) return;
+      const imageFile = Array.from(event.clipboardData?.items || [])
+        .find((item) => item.type.startsWith("image/"))
+        ?.getAsFile();
+      if (!imageFile) return;
+
+      event.preventDefault();
+      pendingModelViewRef.current = hoveredView;
+      void readModelViewRef.current(imageFile);
+    }
+
+    window.addEventListener("paste", handleModelViewPaste);
+    return () => window.removeEventListener("paste", handleModelViewPaste);
+  }, [isModelPanelOpen]);
+
+  useEffect(() => () => {
+    if (divergenceCloseTimerRef.current !== null) {
+      window.clearTimeout(divergenceCloseTimerRef.current);
+    }
+    if (ecommercePanelCloseTimerRef.current !== null) {
+      window.clearTimeout(ecommercePanelCloseTimerRef.current);
+    }
+    if (modelPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(modelPanelCloseTimerRef.current);
+    }
+  }, []);
+
+  function keepEcommercePanelOpen() {
+    if (ecommercePanelCloseTimerRef.current !== null) {
+      window.clearTimeout(ecommercePanelCloseTimerRef.current);
+      ecommercePanelCloseTimerRef.current = null;
+    }
+    setIsDivergenceOpen(false);
+    setIsModelPanelOpen(false);
+    setIsEcommercePanelOpen(true);
+  }
+
+  function scheduleEcommercePanelClose() {
+    if (ecommercePanelCloseTimerRef.current !== null) {
+      window.clearTimeout(ecommercePanelCloseTimerRef.current);
+    }
+    ecommercePanelCloseTimerRef.current = window.setTimeout(() => {
+      setIsEcommercePanelOpen(false);
+      ecommercePanelCloseTimerRef.current = null;
+    }, 140);
+  }
+
+  function keepDivergenceOpen() {
+    if (divergenceCloseTimerRef.current !== null) {
+      window.clearTimeout(divergenceCloseTimerRef.current);
+      divergenceCloseTimerRef.current = null;
+    }
+    setIsEcommercePanelOpen(false);
+    setIsModelPanelOpen(false);
+    setIsDivergenceOpen(true);
+  }
+
+  function scheduleDivergenceClose() {
+    if (isDivergenceFileDialogOpenRef.current) return;
+    if (divergenceCloseTimerRef.current !== null) {
+      window.clearTimeout(divergenceCloseTimerRef.current);
+    }
+    divergenceCloseTimerRef.current = window.setTimeout(() => {
+      setIsDivergenceOpen(false);
+      divergenceCloseTimerRef.current = null;
+    }, 140);
+  }
+
+  function openDivergenceFilePicker() {
+    if (!divergenceFileInputRef.current) return;
+    isDivergenceFileDialogOpenRef.current = true;
+    keepDivergenceOpen();
+
+    window.addEventListener("focus", () => {
+      window.setTimeout(() => {
+        isDivergenceFileDialogOpenRef.current = false;
+        keepDivergenceOpen();
+      }, 0);
+    }, { once: true });
+
+    divergenceFileInputRef.current.click();
+  }
+
+  function keepModelPanelOpen() {
+    if (modelPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(modelPanelCloseTimerRef.current);
+      modelPanelCloseTimerRef.current = null;
+    }
+    setIsEcommercePanelOpen(false);
+    setIsDivergenceOpen(false);
+    setIsModelPanelOpen(true);
+  }
+
+  function scheduleModelPanelClose() {
+    if (modelPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(modelPanelCloseTimerRef.current);
+    }
+    modelPanelCloseTimerRef.current = window.setTimeout(() => {
+      setIsModelPanelOpen(false);
+      modelPanelCloseTimerRef.current = null;
+    }, 140);
+  }
 
   if (!result?.imageBase64) return null;
 
@@ -116,6 +276,7 @@ export function ImagePreviewModal({
   const hidesDescription =
     metadata?.generationType === "scene" ||
     metadata?.generationType === "multi-view" ||
+    metadata?.generationType === "ecommerce-poster" ||
     metadata?.generationType === "divergence" ||
     savedDescription === LEGACY_SCENE_PROMPT ||
     savedDescription === LEGACY_MULTI_VIEW_PROMPT;
@@ -123,6 +284,7 @@ export function ImagePreviewModal({
     Boolean(metadata) &&
     metadata?.generationType !== "scene" &&
     metadata?.generationType !== "multi-view" &&
+    metadata?.generationType !== "ecommerce-poster" &&
     metadata?.generationType !== "divergence";
   const recordedReferenceImages = metadata?.referenceImages?.length
     ? metadata.referenceImages
@@ -430,6 +592,8 @@ export function ImagePreviewModal({
   }
 
   async function readDivergenceReference(file?: File) {
+    isDivergenceFileDialogOpenRef.current = false;
+    keepDivergenceOpen();
     if (!file) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
       setDivergenceUploadError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
@@ -454,6 +618,40 @@ export function ImagePreviewModal({
       setDivergenceUploadError(error instanceof Error ? error.message : "图片读取失败，请重试。");
     } finally {
       if (divergenceFileInputRef.current) divergenceFileInputRef.current.value = "";
+      isDivergenceFileDialogOpenRef.current = false;
+      keepDivergenceOpen();
+    }
+  }
+
+  async function readModelView(file?: File) {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setModelViewUploadError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setModelViewUploadError("每张视图不能超过 10MB。");
+      return;
+    }
+
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("视图读取失败，请重试。"));
+        reader.readAsDataURL(file);
+      });
+      const viewKey = pendingModelViewRef.current;
+      setModelViews((current) => ({
+        ...current,
+        [viewKey]: { name: file.name || `${viewKey}.png`, dataUrl }
+      }));
+      setModelViewUploadError("");
+      keepModelPanelOpen();
+    } catch (error) {
+      setModelViewUploadError(error instanceof Error ? error.message : "视图读取失败，请重试。");
+    } finally {
+      if (modelViewFileInputRef.current) modelViewFileInputRef.current.value = "";
     }
   }
 
@@ -461,7 +659,8 @@ export function ImagePreviewModal({
     if (isGeneratingVariant || (!divergenceStyleIds.length && !divergenceReference)) return;
     onGenerateDivergence?.(result!, metadata?.productName, {
       styleIds: divergenceStyleIds,
-      referenceImage: divergenceReference
+      referenceImage: divergenceReference,
+      referenceWeight: divergenceReference ? divergenceReferenceWeight : undefined
     });
   }
 
@@ -490,6 +689,128 @@ export function ImagePreviewModal({
     }
   }
 
+  async function readApiPayload(response: Response) {
+    const text = await response.text();
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    } catch {
+      throw new Error(`3D 服务返回了无法识别的响应（HTTP ${response.status}）。`);
+    }
+    if (!response.ok) {
+      throw new Error(typeof payload.error === "string" ? payload.error : `3D 服务请求失败（HTTP ${response.status}）。`);
+    }
+    return payload;
+  }
+
+  async function startModelGeneration(useMultiview = false) {
+    if (!result?.imageBase64) return;
+    const hasAdditionalViews = Object.values(modelViews).some(Boolean);
+    if (useMultiview && !hasAdditionalViews) {
+      setModelViewUploadError("请至少补充一张左、后或右视图。");
+      keepModelPanelOpen();
+      return;
+    }
+
+    modelRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    modelRequestAbortRef.current = controller;
+    const requestedResultId = result.id;
+
+    setIsDivergenceOpen(false);
+    setIsModelPanelOpen(false);
+    setIsEditing(false);
+    setIsModelViewerOpen(true);
+    setModelGenerationPhase("uploading");
+    setModelProgress(0);
+    setModelUrl("");
+    setModelBlob(undefined);
+    setModelTaskId("");
+    setModelGenerationError("");
+
+    try {
+      const createResponse = await fetch("/api/tripo/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: result.imageBase64,
+          multiviewImages: useMultiview
+            ? Object.fromEntries(
+                Object.entries(modelViews)
+                  .filter((entry): entry is [ModelViewKey, GenerationSourceImage] => Boolean(entry[1]))
+                  .map(([key, image]) => [key, image.dataUrl])
+              )
+            : undefined
+        }),
+        signal: controller.signal
+      });
+      const createPayload = await readApiPayload(createResponse);
+      const taskId = typeof createPayload.taskId === "string" ? createPayload.taskId : "";
+      if (!taskId) throw new Error("3D 服务没有返回任务编号。");
+      setModelTaskId(taskId);
+
+      setModelGenerationPhase("generating");
+
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        if (controller.signal.aborted || activeResultIdRef.current !== requestedResultId) return;
+        if (attempt > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+          if (controller.signal.aborted || activeResultIdRef.current !== requestedResultId) return;
+        }
+
+        const statusResponse = await fetch(`/api/tripo/status?taskId=${encodeURIComponent(taskId)}`, {
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        const statusPayload = await readApiPayload(statusResponse);
+        const taskStatus = typeof statusPayload.status === "string" ? statusPayload.status : "";
+        const taskProgress = typeof statusPayload.progress === "number" ? statusPayload.progress : 0;
+        setModelProgress(Math.max(0, Math.min(100, taskProgress)));
+
+        if (taskStatus === "success") {
+          const remoteModelUrl = typeof statusPayload.modelUrl === "string" ? statusPayload.modelUrl : "";
+          if (!remoteModelUrl) throw new Error("3D任务已完成，但没有返回模型文件。");
+          const proxiedModelUrl = `/api/tripo/model?url=${encodeURIComponent(remoteModelUrl)}`;
+          const modelResponse = await fetch(proxiedModelUrl, {
+            signal: controller.signal,
+            cache: "no-store"
+          });
+          if (!modelResponse.ok) {
+            const payload = await readApiPayload(modelResponse);
+            throw new Error(typeof payload.error === "string" ? payload.error : "3D模型下载到本地失败。");
+          }
+          const downloadedModel = await modelResponse.blob();
+          if (!downloadedModel.size) throw new Error("3D模型文件为空，请重新生成。");
+          if (controller.signal.aborted || activeResultIdRef.current !== requestedResultId) return;
+          setModelBlob(downloadedModel);
+          setModelUrl("");
+          setModelProgress(100);
+          setModelGenerationPhase("success");
+          try {
+            await onModelGenerated?.(result, downloadedModel, taskId);
+          } catch {
+            // The model remains available in this preview even if local gallery persistence fails.
+          }
+          return;
+        }
+
+        if (["failed", "cancelled", "banned"].includes(taskStatus)) {
+          throw new Error(
+            typeof statusPayload.error === "string" && statusPayload.error
+              ? statusPayload.error
+              : "Tripo 未能完成当前 3D 模型。"
+          );
+        }
+      }
+
+      throw new Error("3D模型生成等待超时，请重新尝试。");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setModelGenerationPhase("error");
+      setModelGenerationError(error instanceof Error ? error.message : "3D模型生成失败，请稍后重试。");
+    }
+  }
+
   return (
     <div className="image-preview-backdrop" onClick={onClose}>
       <div className={`image-preview-dialog has-image-prompt ${isEditing ? "editing" : ""}`} onClick={(event) => event.stopPropagation()}>
@@ -498,6 +819,7 @@ export function ImagePreviewModal({
             <button
               className={`btn-secondary image-preview-action ${isEditing ? "active" : ""}`}
               onClick={() => {
+                setIsEcommercePanelOpen(false);
                 setIsDivergenceOpen(false);
                 setIsEditing((current) => !current);
               }}
@@ -526,15 +848,48 @@ export function ImagePreviewModal({
               <span>{isGeneratingVariant ? "生成中" : "生成场景图"}</span>
             </button>
             <button
+              className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isEcommercePanelOpen ? "active" : ""}`}
+              onClick={keepEcommercePanelOpen}
+              onMouseEnter={keepEcommercePanelOpen}
+              onMouseLeave={scheduleEcommercePanelClose}
+              disabled={isGeneratingVariant || isEditing}
+              title="生成电商长图"
+              aria-expanded={isEcommercePanelOpen}
+            >
+              <ShoppingBag className="h-4 w-4" />
+              <span>{isGeneratingVariant ? "生成中" : "生成电商长图"}</span>
+            </button>
+            <button
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isDivergenceOpen ? "active" : ""}`}
-              onClick={() => setIsDivergenceOpen((current) => !current)}
-              onMouseEnter={() => setIsDivergenceOpen(true)}
+              onClick={keepDivergenceOpen}
+              onMouseEnter={keepDivergenceOpen}
+              onMouseLeave={scheduleDivergenceClose}
               disabled={isGeneratingVariant || isEditing || metadata?.generationType === "divergence"}
               title={metadata?.generationType === "divergence" ? "当前已是创意发散结果" : "创意发散"}
               aria-expanded={isDivergenceOpen}
             >
               <Sparkles className="h-4 w-4" />
               <span>{isGeneratingVariant ? "生成中" : "创意发散"}</span>
+            </button>
+            <button
+              className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isModelPanelOpen || modelGenerationPhase === "success" ? "active" : ""}`}
+              onClick={keepModelPanelOpen}
+              onMouseEnter={keepModelPanelOpen}
+              onMouseLeave={scheduleModelPanelClose}
+              disabled={isEditing}
+              title="生成3D模型"
+              aria-expanded={isModelPanelOpen}
+            >
+              {modelGenerationPhase === "uploading" || modelGenerationPhase === "generating"
+                ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                : <Box className="h-4 w-4" />}
+              <span>
+                {modelGenerationPhase === "success"
+                  ? "3D模型"
+                  : modelGenerationPhase === "uploading" || modelGenerationPhase === "generating"
+                    ? "生成3D中"
+                    : "生成3D模型"}
+              </span>
             </button>
             <button
               className="btn-secondary image-preview-action"
@@ -550,8 +905,204 @@ export function ImagePreviewModal({
           </button>
         </div>
 
+        <TripoModelViewer
+          open={isModelViewerOpen}
+          phase={modelGenerationPhase === "idle" ? "uploading" : modelGenerationPhase}
+          progress={modelProgress}
+          modelUrl={modelUrl || undefined}
+          modelBlob={modelBlob}
+          modelTaskId={modelTaskId || undefined}
+          error={modelGenerationError || undefined}
+          filename={`${result.title.trim().replace(/\s+/g, "-").toLowerCase() || "perdesign-model"}`}
+          onClose={() => setIsModelViewerOpen(false)}
+          onRetry={() => void startModelGeneration()}
+        />
+
+        {isEcommercePanelOpen && !isEditing ? (
+          <section
+            className="ecommerce-poster-panel"
+            aria-label="电商长图设置"
+            onMouseEnter={keepEcommercePanelOpen}
+            onMouseLeave={scheduleEcommercePanelClose}
+          >
+            <div className="ecommerce-poster-panel-heading">
+              <div>
+                <strong>生成电商长图</strong>
+                <span>补充希望重点呈现的卖点、场景、细节或使用方式</span>
+              </div>
+              <button
+                type="button"
+                className="divergence-panel-close"
+                onClick={() => setIsEcommercePanelOpen(false)}
+                title="收起"
+                aria-label="收起电商长图设置"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </button>
+            </div>
+            <textarea
+              className="ecommerce-poster-instruction"
+              value={ecommerceInstruction}
+              onChange={(event) => setEcommerceInstruction(event.target.value)}
+              placeholder="例如：重点展示户外使用场景、旋钮操作和防滑细节，整体使用冷灰色科技风。"
+              maxLength={600}
+              rows={4}
+              autoFocus
+            />
+            <div className="ecommerce-poster-panel-footer">
+              <span>{ecommerceInstruction.length}/600</span>
+              <button
+                type="button"
+                className="ecommerce-poster-submit"
+                onClick={() => onGenerateEcommercePoster?.(result, ecommerceInstruction.trim())}
+                disabled={isGeneratingVariant}
+              >
+                {isGeneratingVariant
+                  ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                  : <SendHorizontal className="h-4 w-4" />}
+                <span>{isGeneratingVariant ? "生成中" : "生成长图"}</span>
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {isModelPanelOpen && !isEditing ? (
+          <section
+            className="model-generation-panel"
+            aria-label="3D模型设置"
+            onMouseEnter={keepModelPanelOpen}
+            onMouseLeave={scheduleModelPanelClose}
+          >
+            <div className="model-generation-panel-heading">
+              <div>
+                <strong>生成3D模型</strong>
+                <span>当前方案作为正视图，可补充其他角度</span>
+              </div>
+              <button
+                type="button"
+                className="divergence-panel-close"
+                onClick={() => setIsModelPanelOpen(false)}
+                title="收起"
+                aria-label="收起3D模型设置"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="model-view-front">
+              <img src={result.imageBase64} alt="" aria-hidden="true" />
+              <span>
+                <strong>正视图</strong>
+                <small>当前方案</small>
+              </span>
+            </div>
+
+            <input
+              ref={modelViewFileInputRef}
+              className="hidden"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => void readModelView(event.target.files?.[0])}
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+
+            <div className="model-view-grid">
+              {MODEL_VIEW_OPTIONS.map((view) => {
+                const image = modelViews[view.key];
+                return (
+                  <div key={view.key} className={`model-view-slot ${image ? "has-image" : ""}`}>
+                    <button
+                      type="button"
+                      className="model-view-upload"
+                      onMouseEnter={() => {
+                        hoveredModelViewRef.current = view.key;
+                        keepModelPanelOpen();
+                      }}
+                      onMouseLeave={() => {
+                        if (hoveredModelViewRef.current === view.key) hoveredModelViewRef.current = null;
+                      }}
+                      onClick={() => {
+                        pendingModelViewRef.current = view.key;
+                        modelViewFileInputRef.current?.click();
+                      }}
+                      title={`上传${view.label}`}
+                    >
+                      {image ? <img src={image.dataUrl} alt={view.label} /> : <Plus className="h-4 w-4" />}
+                      <span>{view.label}</span>
+                    </button>
+                    {image ? (
+                      <button
+                        type="button"
+                        className="model-view-remove"
+                        onClick={() => {
+                          setModelViews((current) => {
+                            const next = { ...current };
+                            delete next[view.key];
+                            return next;
+                          });
+                        }}
+                        title={`移除${view.label}`}
+                        aria-label={`移除${view.label}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            {modelViewUploadError ? <p className="model-view-error">{modelViewUploadError}</p> : null}
+
+            <div className="model-generation-actions">
+              {modelGenerationPhase === "success" && modelBlob ? (
+                <button
+                  type="button"
+                  className="model-generation-secondary"
+                  onClick={() => {
+                    setIsModelPanelOpen(false);
+                    setIsModelViewerOpen(true);
+                  }}
+                >
+                  查看模型
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="model-generation-secondary"
+                  onClick={() => void startModelGeneration(false)}
+                  disabled={modelGenerationPhase === "uploading" || modelGenerationPhase === "generating"}
+                >
+                  单图生成
+                </button>
+              )}
+              <button
+                type="button"
+                className="model-generation-primary"
+                onClick={() => void startModelGeneration(true)}
+                disabled={
+                  modelGenerationPhase === "uploading" ||
+                  modelGenerationPhase === "generating" ||
+                  !Object.values(modelViews).some(Boolean)
+                }
+              >
+                {modelGenerationPhase === "uploading" || modelGenerationPhase === "generating"
+                  ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                  : <Rotate3D className="h-4 w-4" />}
+                <span>多视图生成</span>
+              </button>
+            </div>
+          </section>
+        ) : null}
+
         {isDivergenceOpen && !isEditing ? (
-          <section className="divergence-panel" aria-label="创意发散设置">
+          <section
+            className="divergence-panel"
+            aria-label="创意发散设置"
+            onMouseEnter={keepDivergenceOpen}
+            onMouseLeave={scheduleDivergenceClose}
+          >
             <div className="divergence-panel-heading">
               <div>
                 <strong>创意风格</strong>
@@ -617,7 +1168,7 @@ export function ImagePreviewModal({
                 <button
                   type="button"
                   className="divergence-reference-copy"
-                  onClick={() => divergenceFileInputRef.current?.click()}
+                  onClick={openDivergenceFilePicker}
                 >
                   <strong>{divergenceReference.name}</strong>
                   <span>风格参考图</span>
@@ -636,7 +1187,7 @@ export function ImagePreviewModal({
               <button
                 type="button"
                 className="divergence-upload"
-                onClick={() => divergenceFileInputRef.current?.click()}
+                onClick={openDivergenceFilePicker}
               >
                 <UploadCloud className="h-5 w-5" />
                 <span>
@@ -645,6 +1196,28 @@ export function ImagePreviewModal({
                 </span>
               </button>
             )}
+
+            {divergenceReference ? (
+              <div className="divergence-reference-weight">
+                <div className="divergence-reference-weight-heading">
+                  <span>参考风格权重</span>
+                  <strong>{divergenceReferenceWeight}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={divergenceReferenceWeight}
+                  onChange={(event) => setDivergenceReferenceWeight(Number(event.target.value))}
+                  aria-label="参考风格权重"
+                />
+                <div className="divergence-reference-weight-scale" aria-hidden="true">
+                  <span>轻度参考</span>
+                  <span>强风格跟随</span>
+                </div>
+              </div>
+            ) : null}
 
             {divergenceUploadError ? <p className="divergence-upload-error">{divergenceUploadError}</p> : null}
 

@@ -4,9 +4,11 @@ import type { GenerationBatch, GenerationMetadata, GenerationResult, GenerationS
 
 const BACKUP_VERSION = 1;
 
-type BackupResult = Omit<GenerationResult, "imageBase64"> & {
+type BackupResult = Omit<GenerationResult, "imageBase64" | "modelBlob"> & {
   imageFile?: string;
   imageMime?: string;
+  modelFile?: string;
+  modelMime?: string;
 };
 
 type BackupSourceImage = Omit<GenerationSourceImage, "dataUrl"> & {
@@ -36,7 +38,8 @@ export async function exportPerdesignProject(batches: GenerationBatch[]) {
   const zip = new JSZip();
   const imagesFolder = zip.folder("images");
   const inputsFolder = zip.folder("inputs");
-  if (!imagesFolder || !inputsFolder) throw new Error("无法创建项目图片目录。");
+  const modelsFolder = zip.folder("models");
+  if (!imagesFolder || !inputsFolder || !modelsFolder) throw new Error("无法创建项目资源目录。");
 
   const manifest: BackupManifest = {
     format: "perdesign-project",
@@ -68,12 +71,22 @@ export async function exportPerdesignProject(batches: GenerationBatch[]) {
                 .filter((image): image is BackupSourceImage => Boolean(image))
             }
           : undefined,
-        results: batch.results.map(({ imageBase64, ...result }, resultIndex) => {
-          if (!imageBase64) return result;
-          const mime = getDataUrlMime(imageBase64);
-          const imageFile = `batch-${batchNumber}-image-${String(resultIndex + 1).padStart(3, "0")}.${getImageExtension(mime)}`;
-          imagesFolder.file(imageFile, imageBase64.split(",")[1], { base64: true });
-          return { ...result, imageFile: `images/${imageFile}`, imageMime: mime };
+        results: batch.results.map(({ imageBase64, modelBlob, ...result }, resultIndex) => {
+          const stored: BackupResult = { ...result };
+          if (imageBase64) {
+            const mime = getDataUrlMime(imageBase64);
+            const imageFile = `batch-${batchNumber}-image-${String(resultIndex + 1).padStart(3, "0")}.${getImageExtension(mime)}`;
+            imagesFolder.file(imageFile, imageBase64.split(",")[1], { base64: true });
+            stored.imageFile = `images/${imageFile}`;
+            stored.imageMime = mime;
+          }
+          if (modelBlob) {
+            const modelFile = `batch-${batchNumber}-model-${String(resultIndex + 1).padStart(3, "0")}.glb`;
+            modelsFolder.file(modelFile, modelBlob);
+            stored.modelFile = `models/${modelFile}`;
+            stored.modelMime = modelBlob.type || "model/gltf-binary";
+          }
+          return stored;
         })
       };
     })
@@ -88,7 +101,8 @@ export async function exportPerdesignProject(batches: GenerationBatch[]) {
       "请通过平台的“本地作品 - 导入项目”恢复，不要单独修改 project.json 或 images 文件夹。",
       `导出时间：${new Date().toLocaleString()}`,
       `批次数量：${batches.length}`,
-      `图片数量：${batches.reduce((sum, batch) => sum + batch.results.filter((result) => result.imageBase64).length, 0)}`
+      `图片数量：${batches.reduce((sum, batch) => sum + batch.results.filter((result) => result.assetType !== "model3d" && result.imageBase64).length, 0)}`,
+      `3D 模型数量：${batches.reduce((sum, batch) => sum + batch.results.filter((result) => result.modelBlob).length, 0)}`
     ].join("\n")
   );
 
@@ -125,14 +139,26 @@ export async function importPerdesignProject(file: File): Promise<GenerationBatc
           }
         : undefined,
       results: await Promise.all(
-        batch.results.map(async ({ imageFile, imageMime, ...result }) => {
-          if (!imageFile) return result;
-          const imageEntry = zip.file(imageFile);
-          if (!imageEntry) throw new Error(`项目文件缺少图片：${imageFile}`);
-          const base64 = await imageEntry.async("base64");
+        batch.results.map(async ({ imageFile, imageMime, modelFile, modelMime, ...result }) => {
+          let imageBase64: string | undefined;
+          let modelBlob: Blob | undefined;
+          if (imageFile) {
+            const imageEntry = zip.file(imageFile);
+            if (!imageEntry) throw new Error(`项目文件缺少图片：${imageFile}`);
+            const base64 = await imageEntry.async("base64");
+            imageBase64 = `data:${imageMime || "image/png"};base64,${base64}`;
+          }
+          if (modelFile) {
+            const modelEntry = zip.file(modelFile);
+            if (!modelEntry) throw new Error(`项目文件缺少3D模型：${modelFile}`);
+            modelBlob = new Blob([await modelEntry.async("arraybuffer")], {
+              type: modelMime || "model/gltf-binary"
+            });
+          }
           return {
             ...result,
-            imageBase64: `data:${imageMime || "image/png"};base64,${base64}`
+            imageBase64,
+            modelBlob
           };
         })
       )

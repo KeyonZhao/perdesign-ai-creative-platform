@@ -98,8 +98,16 @@ export function buildCreativeDivergencePrompt({
         ...quadrantStyles.map((style, index) => `${quadrantNames[index]}：${style.prompt}`)
       ].join("\n")
     : "";
+  const referenceWeight = Math.max(0, Math.min(100, Math.round(request.referenceWeight ?? 50)));
+  const referenceWeightInstruction = referenceWeight <= 25
+    ? "轻度参考：仅借鉴配色、材质和少量细节气质，主体造型仍以原始产品方案为主。"
+    : referenceWeight <= 55
+      ? "中度参考：明显吸收参考图的线面关系、体块节奏、结构层级、CMF 与细节语言，同时保持原产品的品类、功能和核心识别。"
+      : referenceWeight <= 80
+        ? "强度参考：系统迁移参考图的造型语法、比例节奏、结构分区、曲面转折、CMF 和细节组织，但不得照搬参考产品的完整轮廓与专属零件。"
+        : "极强参考：在不改变原产品品类、核心功能、人机关系和必要接口的前提下，最大化风格一致性，使四款方案都清晰呈现参考图的完整设计语言；仍禁止复制参考产品本身。";
   const styleInstruction = request.referenceImage
-    ? "第二张输入图片是风格参考图。只提取其中适合当前产品的造型语言、线面关系、体块节奏、结构层级、细节组织、材质、配色与表面处理，并转化为当前产品自己的设计语言。不得复制参考图的产品品类、完整外形、功能结构、按钮接口、品牌标识或特定零件。四个象限都采用该参考图所传达的设计风格。"
+    ? `第二张输入图片是风格参考图，参考风格权重为 ${referenceWeight}%。${referenceWeightInstruction} 只提取其中适合当前产品的造型语言、线面关系、体块节奏、结构层级、细节组织、材质、配色与表面处理，并转化为当前产品自己的设计语言。不得复制参考图的产品品类、完整外形、功能结构、按钮接口、品牌标识或特定零件。四个象限都采用该参考图所传达的设计风格。`
     : quadrantStyleInstruction;
 
   if (!styleInstruction) {

@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { AlertTriangle, Download, Maximize2, Mountain, Paintbrush, Rotate3D } from "lucide-react";
+import { AlertTriangle, Box, Download, Maximize2, Mountain, Paintbrush, Rotate3D } from "lucide-react";
 import { useRef } from "react";
 import type { GenerationResult } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
@@ -11,6 +11,7 @@ type ResultCardProps = {
   result: GenerationResult;
   index: number;
   onPreview: (result: GenerationResult) => void;
+  onPreviewModel: (result: GenerationResult) => void;
   onEdit: (result: GenerationResult) => void;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
@@ -21,6 +22,7 @@ export function ResultCard({
   result,
   index,
   onPreview,
+  onPreviewModel,
   onEdit,
   onGenerateMultiView,
   onGenerateScene,
@@ -28,10 +30,29 @@ export function ResultCard({
 }: ResultCardProps) {
   const dragObjectUrlRef = useRef<string | null>(null);
   const filename = `concept-${String(index + 1).padStart(2, "0")}.png`;
+  const isModel = result.assetType === "model3d" && Boolean(result.modelBlob);
 
   return (
     <article className="content-card overflow-hidden">
-      {result.imageBase64 ? (
+      {isModel ? (
+        <button
+          type="button"
+          className="model-result-card"
+          onClick={() => onPreviewModel(result)}
+          aria-label="打开3D模型"
+          title="打开3D模型"
+        >
+          {result.imageBase64 ? (
+            <img src={result.imageBase64} alt="" className="model-result-thumbnail" aria-hidden="true" />
+          ) : null}
+          <span className="model-result-shade" />
+          <span className="model-result-mark">
+            <Box className="h-7 w-7" />
+            <strong>3D</strong>
+          </span>
+          <span className="model-result-type">无贴图模型</span>
+        </button>
+      ) : result.imageBase64 ? (
         <div className="group relative bg-black/20">
           <button type="button" className="block w-full cursor-grab active:cursor-grabbing" onClick={() => onPreview(result)}>
             <img

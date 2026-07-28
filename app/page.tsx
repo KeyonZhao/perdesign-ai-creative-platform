@@ -31,6 +31,7 @@ import {
 import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
 import { convertImageDataUrlToPng, prepareImageForVision } from "@/lib/image";
 import { buildCreativeDivergencePrompt } from "@/lib/creative-divergence";
+import { buildEcommercePosterPrompt } from "@/lib/ecommerce-poster";
 import {
   addPendingImageJob,
   loadPendingImageJobs,
@@ -87,6 +88,7 @@ type PendingAuthAction =
   | { type: "research" }
   | { type: "multi-view"; result: GenerationResult }
   | { type: "scene"; result: GenerationResult }
+  | { type: "ecommerce-poster"; result: GenerationResult; productName?: string; instruction?: string }
   | { type: "divergence"; result: GenerationResult; productName?: string; request: CreativeDivergenceRequest }
   | { type: "image-prompt"; result: GenerationResult; instruction: string; referenceImages?: GenerationSourceImage[] }
   | { type: "local-edit"; result: GenerationResult; maskImageBase64: string; instruction: string; guideImageBase64?: string }
@@ -329,6 +331,36 @@ export default function Home() {
     }
   }
 
+  async function saveGeneratedModel(sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) {
+    const currentBatches = generationBatchesRef.current;
+    const sourceBatch = currentBatches.find((batch) =>
+      batch.results.some((result) => result.id === sourceResult.id)
+    );
+    const modelNumber = currentBatches.reduce(
+      (sum, batch) => sum + batch.results.filter((result) => result.assetType === "model3d").length,
+      0
+    ) + 1;
+    const modelBatch: GenerationBatch = {
+      id: makeId("model3d-batch"),
+      metadata: sourceBatch?.metadata,
+      results: [{
+        id: makeId("model3d"),
+        assetType: "model3d",
+        title: `3D Model ${String(modelNumber).padStart(2, "0")}`,
+        prompt: `由 ${sourceResult.title || "当前方案"} 生成的无贴图3D模型`,
+        imageBase64: sourceResult.imageBase64,
+        modelBlob,
+        modelTaskId
+      }]
+    };
+    const nextBatches = [...currentBatches, modelBatch];
+    generationBatchesRef.current = nextBatches;
+    setGenerationBatches(nextBatches);
+    setActiveGenerationBatchId(modelBatch.id);
+    await persistGeneratedBatch(modelBatch);
+    pushToast("success", "3D模型已生成并保存到画廊。");
+  }
+
   async function pollImageJob(
     jobId: string,
     config: {
@@ -435,7 +467,9 @@ export default function Home() {
           return {
             ...result,
             id: makeId(`imported-${result.id || "result"}`),
-            title: `Concept ${String(sequence).padStart(2, "0")}`
+            title: result.assetType === "model3d"
+              ? `3D Model ${String(sequence).padStart(2, "0")}`
+              : `Concept ${String(sequence).padStart(2, "0")}`
           };
         })
       }));
@@ -509,6 +543,9 @@ export default function Home() {
         break;
       case "scene":
         void generateSceneCore(action.result, forceAuthorized);
+        break;
+      case "ecommerce-poster":
+        void generateEcommercePosterCore(action.result, action.productName, action.instruction, forceAuthorized);
         break;
       case "divergence":
         void generateDivergenceCore(action.result, action.productName, action.request, forceAuthorized);
@@ -929,6 +966,55 @@ export default function Home() {
       requirement: SCENE_GENERATION_PROMPT,
       count: 1,
       generationType: "scene"
+    }, forceAuthorized);
+  }
+
+  async function generateEcommercePoster(
+    result: GenerationResult,
+    sourceProductName?: string,
+    instruction?: string
+  ) {
+    const normalizedInstruction = instruction?.trim();
+    if (!ensureAuthorized({
+      type: "ecommerce-poster",
+      result,
+      productName: sourceProductName,
+      instruction: normalizedInstruction
+    })) return;
+    await generateEcommercePosterCore(result, sourceProductName, normalizedInstruction);
+  }
+
+  async function generateEcommercePosterCore(
+    result: GenerationResult,
+    sourceProductName?: string,
+    instruction?: string,
+    forceAuthorized = false
+  ) {
+    const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } =
+      getResolvedConfig(forceAuthorized);
+    if (!unlocked) return;
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
+      return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    }
+    if (!result.imageBase64) return pushToast("error", "当前图片不可用于电商海报生成。");
+
+    const resolvedProductName = sourceProductName?.trim() || productName.trim();
+    const pngSourceImage = await convertImageDataUrlToPng(result.imageBase64);
+    const ecommercePrompt = buildEcommercePosterPrompt({
+      productName: resolvedProductName,
+      userInstruction: instruction
+    });
+
+    await runGeneration({
+      productName: resolvedProductName,
+      productImage: { name: `${result.title}.png`, dataUrl: pngSourceImage },
+      innovationLevel: 0,
+      requirement: ecommercePrompt,
+      count: 1,
+      generationType: "ecommerce-poster",
+      metadataDescription: instruction?.trim() || "电商详情长图",
+      sizeOverride: "1440x2560",
+      useExactPrompt: true
     }, forceAuthorized);
   }
 
@@ -1360,9 +1446,11 @@ export default function Home() {
                     isGeneratingVariant={status === "generating"}
                     onGenerateMultiView={generateMultiView}
                     onGenerateScene={generateScene}
+                    onGenerateEcommercePoster={generateEcommercePoster}
                     onGenerateDivergence={generateDivergence}
                     onGenerateFromPrompt={generateFromImagePrompt}
                     onGenerateDesignDescription={generateDesignDescription}
+                    onModelGenerated={saveGeneratedModel}
                     designDescriptionLoadingIds={designDescriptionLoadingIds}
                     onLocalEdit={generateLocalEdit}
                     onGenerateCustom={generateCustomCanvas}

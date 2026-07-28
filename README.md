@@ -20,6 +20,9 @@ PERDESIGN_CHAT_BASE_URL=https://api-cn.65535.space/v1
 PERDESIGN_CHAT_API_KEY=your_chat_api_key_here
 PERDESIGN_IMAGE_BASE_URL=https://img-cn.65535.space/v1
 PERDESIGN_IMAGE_API_KEY=your_image_api_key_here
+TRIPO_API_KEY=your_tripo_api_key_here
+# 可选，默认使用 P1-20260311
+TRIPO_MODEL=P1-20260311
 ```
 
 真实 API Key 只由 Next.js 服务端读取，不会进入前端代码、浏览器存储或 Git 仓库。前端统一请求本项目的 API 路由，再由服务端转发到 OpenAI 兼容供应商。
@@ -51,7 +54,7 @@ PERDESIGN_IMAGE_API_KEY=your_image_api_key_here
 
 1. 推送项目到 Git 仓库。
 2. 在 Vercel 导入项目。
-3. 在 Vercel 项目环境变量中设置 `PERDESIGN_CHAT_BASE_URL`、`PERDESIGN_CHAT_API_KEY`、`PERDESIGN_IMAGE_BASE_URL` 和 `PERDESIGN_IMAGE_API_KEY`。
+3. 在 Vercel 项目环境变量中设置 `PERDESIGN_CHAT_BASE_URL`、`PERDESIGN_CHAT_API_KEY`、`PERDESIGN_IMAGE_BASE_URL`、`PERDESIGN_IMAGE_API_KEY` 和 `TRIPO_API_KEY`。
 4. 部署完成后访问域名，输入口令进入工作台。
 
 图片生成使用异步任务模式，页面会持续查询任务状态并逐张展示结果。
@@ -60,6 +63,7 @@ PERDESIGN_IMAGE_API_KEY=your_image_api_key_here
 
 - `服务器尚未配置文本服务`：检查部署环境是否已设置 `PERDESIGN_CHAT_API_KEY`。
 - `服务器尚未配置生图服务`：检查部署环境是否已设置 `PERDESIGN_IMAGE_API_KEY`。
+- `服务器尚未配置 Tripo 3D 服务`：检查部署环境是否已设置 `TRIPO_API_KEY`。
 - `API Key 无效或权限不足`：检查供应商 Key、余额和模型权限。
 - `当前模型不存在或暂不可用`：到 `lib/models.ts` 更换模型 ID。
 - `大脑模型没有返回可识别的 JSON 数组`：更换支持图片理解的模型，或降低生成数量后重试。

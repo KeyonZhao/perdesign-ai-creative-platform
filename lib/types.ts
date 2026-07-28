@@ -20,7 +20,10 @@ export type ConceptPrompt = {
 
 export type GenerationResult = ConceptPrompt & {
   id: string;
+  assetType?: "image" | "model3d";
   imageBase64?: string;
+  modelBlob?: Blob;
+  modelTaskId?: string;
   designDescription?: string;
   error?: string;
 };
@@ -44,9 +47,17 @@ export type DivergenceStyleId =
 export type CreativeDivergenceRequest = {
   styleIds?: DivergenceStyleId[];
   referenceImage?: GenerationSourceImage;
+  referenceWeight?: number;
 };
 
-export type GenerationType = "design" | "multi-view" | "scene" | "divergence" | "local-edit" | "image-prompt";
+export type GenerationType =
+  | "design"
+  | "multi-view"
+  | "scene"
+  | "ecommerce-poster"
+  | "divergence"
+  | "local-edit"
+  | "image-prompt";
 
 export type GenerationMetadata = {
   productName?: string;
