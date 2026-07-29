@@ -3,11 +3,12 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Box, Check, ChevronDown, ChevronUp, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
+import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
-import type { CreativeDivergenceRequest, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage } from "@/lib/types";
+import type { CreativeDivergenceRequest, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage, VideoGenerationRequest } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
 import { TripoModelViewer } from "./TripoModelViewer";
+import { VideoGenerationPanel } from "./VideoGenerationPanel";
 
 type ImagePreviewModalProps = {
   isGeneratingVariant?: boolean;
@@ -21,6 +22,7 @@ type ImagePreviewModalProps = {
     request: CreativeDivergenceRequest
   ) => void;
   onGenerateFromPrompt?: (result: GenerationResult, instruction: string, referenceImages?: GenerationSourceImage[]) => void;
+  onGenerateVideo?: (result: GenerationResult, request: VideoGenerationRequest) => void;
   onGenerateDesignDescription?: (result: GenerationResult) => Promise<string>;
   onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) => void;
   onModelGenerated?: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
@@ -56,6 +58,7 @@ export function ImagePreviewModal({
   onGenerateEcommercePoster,
   onGenerateDivergence,
   onGenerateFromPrompt,
+  onGenerateVideo,
   onGenerateDesignDescription,
   onLocalEdit,
   onModelGenerated,
@@ -72,6 +75,7 @@ export function ImagePreviewModal({
   const divergenceCloseTimerRef = useRef<number | null>(null);
   const isDivergenceFileDialogOpenRef = useRef(false);
   const ecommercePanelCloseTimerRef = useRef<number | null>(null);
+  const videoPanelCloseTimerRef = useRef<number | null>(null);
   const modelViewFileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingModelViewRef = useRef<ModelViewKey>("left");
   const hoveredModelViewRef = useRef<ModelViewKey | null>(null);
@@ -91,6 +95,7 @@ export function ImagePreviewModal({
   const [imagePromptReferences, setImagePromptReferences] = useState<GenerationSourceImage[]>([]);
   const [imagePromptUploadError, setImagePromptUploadError] = useState("");
   const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
+  const [isVideoPanelOpen, setIsVideoPanelOpen] = useState(false);
   const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
@@ -103,6 +108,7 @@ export function ImagePreviewModal({
   const [designDescriptionError, setDesignDescriptionError] = useState("");
   const [hasCopiedDescription, setHasCopiedDescription] = useState(false);
   const [isSourceDescriptionExpanded, setIsSourceDescriptionExpanded] = useState(false);
+  const [isPosterZoomOpen, setIsPosterZoomOpen] = useState(false);
   const [selectedDivergenceQuadrant, setSelectedDivergenceQuadrant] =
     useState<DivergenceQuadrantPosition | null>(null);
   const [isModelPanelOpen, setIsModelPanelOpen] = useState(false);
@@ -129,6 +135,7 @@ export function ImagePreviewModal({
     setImagePromptReferences([]);
     setImagePromptUploadError("");
     setIsEcommercePanelOpen(false);
+    setIsVideoPanelOpen(false);
     setEcommerceInstruction("");
     setIsDivergenceOpen(false);
     setDivergenceStyleIds([]);
@@ -142,6 +149,7 @@ export function ImagePreviewModal({
     setDesignDescriptionError("");
     setHasCopiedDescription(false);
     setIsSourceDescriptionExpanded(false);
+    setIsPosterZoomOpen(false);
     setSelectedDivergenceQuadrant(null);
     setIsModelPanelOpen(startModelPanel);
     setModelViews({});
@@ -187,6 +195,9 @@ export function ImagePreviewModal({
     if (modelPanelCloseTimerRef.current !== null) {
       window.clearTimeout(modelPanelCloseTimerRef.current);
     }
+    if (videoPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(videoPanelCloseTimerRef.current);
+    }
   }, []);
 
   function keepEcommercePanelOpen() {
@@ -196,6 +207,7 @@ export function ImagePreviewModal({
     }
     setIsDivergenceOpen(false);
     setIsModelPanelOpen(false);
+    setIsVideoPanelOpen(false);
     setIsEcommercePanelOpen(true);
   }
 
@@ -216,6 +228,7 @@ export function ImagePreviewModal({
     }
     setIsEcommercePanelOpen(false);
     setIsModelPanelOpen(false);
+    setIsVideoPanelOpen(false);
     setIsDivergenceOpen(true);
   }
 
@@ -252,6 +265,7 @@ export function ImagePreviewModal({
     }
     setIsEcommercePanelOpen(false);
     setIsDivergenceOpen(false);
+    setIsVideoPanelOpen(false);
     setIsModelPanelOpen(true);
   }
 
@@ -262,6 +276,27 @@ export function ImagePreviewModal({
     modelPanelCloseTimerRef.current = window.setTimeout(() => {
       setIsModelPanelOpen(false);
       modelPanelCloseTimerRef.current = null;
+    }, 140);
+  }
+
+  function keepVideoPanelOpen() {
+    if (videoPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(videoPanelCloseTimerRef.current);
+      videoPanelCloseTimerRef.current = null;
+    }
+    setIsEcommercePanelOpen(false);
+    setIsDivergenceOpen(false);
+    setIsModelPanelOpen(false);
+    setIsVideoPanelOpen(true);
+  }
+
+  function scheduleVideoPanelClose() {
+    if (videoPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(videoPanelCloseTimerRef.current);
+    }
+    videoPanelCloseTimerRef.current = window.setTimeout(() => {
+      setIsVideoPanelOpen(false);
+      videoPanelCloseTimerRef.current = null;
     }, 140);
   }
 
@@ -296,6 +331,8 @@ export function ImagePreviewModal({
   const canCollapseDescription = savedDescription.length > 88;
   const canSelectDivergenceQuadrant =
     metadata?.generationType === "divergence" && !isEditing;
+  const canZoomEcommercePoster =
+    metadata?.generationType === "ecommerce-poster" && !isEditing;
   const selectedDivergenceQuadrantIndex = selectedDivergenceQuadrant
     ? DIVERGENCE_QUADRANTS.indexOf(selectedDivergenceQuadrant)
     : -1;
@@ -550,8 +587,8 @@ export function ImagePreviewModal({
       setImagePromptUploadError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
       return;
     }
-    if (selectedFiles.some((file) => file.size > 10 * 1024 * 1024)) {
-      setImagePromptUploadError("每张图片不能超过 10MB。");
+    if (selectedFiles.some((file) => file.size > 25 * 1024 * 1024)) {
+      setImagePromptUploadError("每张图片不能超过 25MB。");
       return;
     }
 
@@ -601,8 +638,8 @@ export function ImagePreviewModal({
       setDivergenceUploadError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setDivergenceUploadError("风格参考图不能超过 10MB。");
+    if (file.size > 25 * 1024 * 1024) {
+      setDivergenceUploadError("风格参考图不能超过 25MB。");
       return;
     }
 
@@ -631,8 +668,8 @@ export function ImagePreviewModal({
       setModelViewUploadError("请上传 PNG、JPG、JPEG 或 WebP 图片。");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setModelViewUploadError("每张视图不能超过 10MB。");
+    if (file.size > 25 * 1024 * 1024) {
+      setModelViewUploadError("每张视图不能超过 25MB。");
       return;
     }
 
@@ -823,6 +860,7 @@ export function ImagePreviewModal({
               onClick={() => {
                 setIsEcommercePanelOpen(false);
                 setIsDivergenceOpen(false);
+                setIsVideoPanelOpen(false);
                 setIsEditing((current) => !current);
               }}
               disabled={isGeneratingVariant}
@@ -872,6 +910,18 @@ export function ImagePreviewModal({
             >
               <Sparkles className="h-4 w-4" />
               <span>{isGeneratingVariant ? "生成中" : "创意发散"}</span>
+            </button>
+            <button
+              className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isVideoPanelOpen ? "active" : ""}`}
+              onClick={keepVideoPanelOpen}
+              onMouseEnter={keepVideoPanelOpen}
+              onMouseLeave={scheduleVideoPanelClose}
+              disabled={isGeneratingVariant || isEditing}
+              title="生成视频"
+              aria-expanded={isVideoPanelOpen}
+            >
+              <Clapperboard className="h-4 w-4" />
+              <span>{isGeneratingVariant ? "生成中" : "生成视频"}</span>
             </button>
             <button
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isModelPanelOpen || modelGenerationPhase === "success" ? "active" : ""}`}
@@ -1098,6 +1148,16 @@ export function ImagePreviewModal({
           </section>
         ) : null}
 
+        {isVideoPanelOpen && !isEditing ? (
+          <VideoGenerationPanel
+            disabled={isGeneratingVariant}
+            onClose={() => setIsVideoPanelOpen(false)}
+            onMouseEnter={keepVideoPanelOpen}
+            onMouseLeave={scheduleVideoPanelClose}
+            onSubmit={(request) => onGenerateVideo?.(result, request)}
+          />
+        ) : null}
+
         {isDivergenceOpen && !isEditing ? (
           <section
             className="divergence-panel"
@@ -1284,7 +1344,10 @@ export function ImagePreviewModal({
             <img
               src={result.imageBase64}
               alt={result.title}
-              className={`image-preview-image ${isEditing ? "" : "image-file-draggable"}`}
+              className={`image-preview-image ${isEditing ? "" : "image-file-draggable"} ${canZoomEcommercePoster ? "ecommerce-poster-zoomable" : ""}`}
+              onClick={() => {
+                if (canZoomEcommercePoster) setIsPosterZoomOpen(true);
+              }}
               onLoad={(event) => initializeCanvas(event.currentTarget)}
               draggable={!isEditing}
               onDragStart={(event) => {
@@ -1465,6 +1528,31 @@ export function ImagePreviewModal({
             </aside>
           </div>
         </div>
+
+        {isPosterZoomOpen && canZoomEcommercePoster ? (
+          <div
+            className="ecommerce-poster-zoom-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-label="电商长图放大预览"
+            onClick={() => setIsPosterZoomOpen(false)}
+          >
+            <button
+              type="button"
+              className="btn-secondary ecommerce-poster-zoom-close"
+              onClick={() => setIsPosterZoomOpen(false)}
+              title="关闭放大预览"
+              aria-label="关闭放大预览"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <img
+              src={result.imageBase64}
+              alt={`${result.title} 放大预览`}
+              onClick={(event) => event.stopPropagation()}
+            />
+          </div>
+        ) : null}
 
         {isEditing ? (
           <div className="local-edit-composer">

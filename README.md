@@ -16,9 +16,9 @@ npm run dev
 复制 `.env.example` 为 `.env.local`，填写服务端环境变量：
 
 ```txt
-PERDESIGN_CHAT_BASE_URL=https://api-cn.65535.space/v1
+PERDESIGN_CHAT_BASE_URL=https://api2.65535.space/v1
 PERDESIGN_CHAT_API_KEY=your_chat_api_key_here
-PERDESIGN_IMAGE_BASE_URL=https://img-cn.65535.space/v1
+PERDESIGN_IMAGE_BASE_URL=https://api2.65535.space/v1
 PERDESIGN_IMAGE_API_KEY=your_image_api_key_here
 TRIPO_API_KEY=your_tripo_api_key_here
 # 可选，默认使用 P1-20260311

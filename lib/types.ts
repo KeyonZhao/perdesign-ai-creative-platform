@@ -20,10 +20,13 @@ export type ConceptPrompt = {
 
 export type GenerationResult = ConceptPrompt & {
   id: string;
-  assetType?: "image" | "model3d";
+  assetType?: "image" | "model3d" | "video";
   imageBase64?: string;
   modelBlob?: Blob;
   modelTaskId?: string;
+  videoUrl?: string;
+  videoTaskId?: string;
+  videoStatus?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   designDescription?: string;
   error?: string;
 };
@@ -50,6 +53,13 @@ export type CreativeDivergenceRequest = {
   referenceWeight?: number;
 };
 
+export type VideoGenerationRequest = {
+  prompt: string;
+  ratio: "16:9" | "9:16" | "1:1";
+  duration: 5 | 10;
+  resolution: "720p" | "1080p";
+};
+
 export type GenerationType =
   | "design"
   | "multi-view"
@@ -57,7 +67,8 @@ export type GenerationType =
   | "ecommerce-poster"
   | "divergence"
   | "local-edit"
-  | "image-prompt";
+  | "image-prompt"
+  | "video";
 
 export type GenerationMetadata = {
   productName?: string;

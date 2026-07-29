@@ -7,7 +7,7 @@ import { Image as ImageIcon, ImagePlus, PenLine, Trash2, UploadCloud, X } from "
 import type { ProductInputMode, UploadedImage } from "@/lib/types";
 import { formatBytes, getGalleryDraggedImage } from "@/lib/image";
 
-const MAX_SIZE = 10 * 1024 * 1024;
+const MAX_SIZE = 25 * 1024 * 1024;
 const ACCEPTED = ["image/png", "image/jpeg", "image/webp"];
 
 type ImageUploaderProps = {
@@ -45,7 +45,7 @@ export function ImageUploader({
       return;
     }
     if (file.size > MAX_SIZE) {
-      onError("图片不能超过 10MB。");
+      onError("图片不能超过 25MB。");
       return;
     }
 

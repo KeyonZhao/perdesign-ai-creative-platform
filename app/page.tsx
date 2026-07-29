@@ -48,7 +48,8 @@ import type {
   GenerationType,
   ProductInputMode,
   ToastMessage,
-  UploadedImage
+  UploadedImage,
+  VideoGenerationRequest
 } from "@/lib/types";
 import { makeId } from "@/lib/utils";
 
@@ -69,8 +70,8 @@ const storageKeys = {
 
 const BRAIN_MODEL = "gpt-5.5";
 const AUTH_CODE = "perdesignsg";
-const DEFAULT_IMAGE_API_BASE_URL = "https://img-cn.65535.space/v1";
-const DEFAULT_CHAT_API_BASE_URL = "https://api-cn.65535.space/v1";
+const DEFAULT_IMAGE_API_BASE_URL = "https://api2.65535.space/v1";
+const DEFAULT_CHAT_API_BASE_URL = "https://api2.65535.space/v1";
 const SCENE_GENERATION_PROMPT = "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图";
 const PRESET_CHAT_API_KEY = "server-managed";
 const PRESET_IMAGE_API_KEY = "server-managed";
@@ -91,6 +92,7 @@ type PendingAuthAction =
   | { type: "ecommerce-poster"; result: GenerationResult; productName?: string; instruction?: string }
   | { type: "divergence"; result: GenerationResult; productName?: string; request: CreativeDivergenceRequest }
   | { type: "image-prompt"; result: GenerationResult; instruction: string; referenceImages?: GenerationSourceImage[] }
+  | { type: "video"; result: GenerationResult; request: VideoGenerationRequest }
   | { type: "local-edit"; result: GenerationResult; maskImageBase64: string; instruction: string; guideImageBase64?: string }
   | { type: "custom-generate"; request: CustomCanvasGenerationRequest }
   | null;
@@ -553,6 +555,9 @@ export default function Home() {
       case "image-prompt":
         void generateFromImagePromptCore(action.result, action.instruction, action.referenceImages, forceAuthorized);
         break;
+      case "video":
+        void generateVideoCore(action.result, action.request, forceAuthorized);
+        break;
       case "local-edit":
         void generateLocalEditCore(action.result, action.maskImageBase64, action.instruction, action.guideImageBase64, forceAuthorized);
         break;
@@ -773,6 +778,50 @@ export default function Home() {
     useExactPrompt?: boolean;
   }, forceAuthorized = false) {
     const config = getResolvedConfig(forceAuthorized);
+    const referenceImageCount = (params.referenceImage ? 1 : 0) + (params.referenceImages?.length || 0);
+    const requestImageCount =
+      (params.sketchImage ? 1 : 0) +
+      (params.productImage ? 1 : 0) +
+      referenceImageCount;
+    const maximumImageDataUrlLength = requestImageCount >= 4
+      ? 600_000
+      : requestImageCount >= 2
+        ? 750_000
+        : 1_000_000;
+    const preserveLocalEditPixels = Boolean(params.maskImageBase64);
+
+    let preparedSketchImageBase64 = params.sketchImage?.dataUrl;
+    let preparedProductImageBase64 = params.productImage?.dataUrl;
+    let preparedReferenceImageBase64 = params.referenceImage?.dataUrl;
+    let preparedReferenceImageBase64s = params.referenceImages?.map((image) => image.dataUrl);
+
+    try {
+      [
+        preparedSketchImageBase64,
+        preparedProductImageBase64,
+        preparedReferenceImageBase64,
+        preparedReferenceImageBase64s
+      ] = await Promise.all([
+        params.sketchImage
+          ? prepareImageForVision(params.sketchImage.dataUrl, 1800, 0.84, maximumImageDataUrlLength)
+          : Promise.resolve(undefined),
+        params.productImage && !preserveLocalEditPixels
+          ? prepareImageForVision(params.productImage.dataUrl, 1800, 0.84, maximumImageDataUrlLength)
+          : Promise.resolve(params.productImage?.dataUrl),
+        params.referenceImage
+          ? prepareImageForVision(params.referenceImage.dataUrl, 1800, 0.84, maximumImageDataUrlLength)
+          : Promise.resolve(undefined),
+        params.referenceImages
+          ? Promise.all(params.referenceImages.map((image) =>
+              prepareImageForVision(image.dataUrl, 1800, 0.84, maximumImageDataUrlLength)
+            ))
+          : Promise.resolve(undefined)
+      ]);
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "图片处理失败，请更换图片后重试。");
+      return;
+    }
+
     const batchId = makeId("generation-batch");
     const existingBatches = generationBatchesRef.current;
     const existingResultCount = existingBatches.reduce((sum, batch) => sum + batch.results.length, 0);
@@ -818,12 +867,12 @@ export default function Home() {
             brainModel: BRAIN_MODEL,
             imageModel,
             productName: params.productName,
-            sketchImageBase64: params.sketchImage?.dataUrl,
-            imageBase64: params.productImage?.dataUrl,
+            sketchImageBase64: preparedSketchImageBase64,
+            imageBase64: preparedProductImageBase64,
             maskImageBase64: params.maskImageBase64,
             localEditGuideImageBase64: params.localEditGuideImageBase64,
-            referenceImageBase64: params.referenceImage?.dataUrl,
-            referenceImageBase64s: params.referenceImages?.map((image) => image.dataUrl),
+            referenceImageBase64: preparedReferenceImageBase64,
+            referenceImageBase64s: preparedReferenceImageBase64s,
             innovationLevel: params.innovationLevel,
             requirement: params.requirement,
             useExactPrompt: params.useExactPrompt,
@@ -1118,6 +1167,145 @@ export default function Home() {
     );
   }
 
+  async function generateVideo(result: GenerationResult, request: VideoGenerationRequest) {
+    if (!ensureAuthorized({ type: "video", result, request })) return;
+    await generateVideoCore(result, request);
+  }
+
+  async function generateVideoCore(
+    result: GenerationResult,
+    request: VideoGenerationRequest,
+    forceAuthorized = false
+  ) {
+    const { unlocked } = getResolvedConfig(forceAuthorized);
+    if (!unlocked) return;
+    if (!result.imageBase64) return pushToast("error", "当前图片不可用于视频生成。");
+
+    const currentBatches = generationBatchesRef.current;
+    const sourceBatch = currentBatches.find((batch) =>
+      batch.results.some((item) => item.id === result.id)
+    );
+    const videoNumber = currentBatches.reduce(
+      (sum, batch) => sum + batch.results.filter((item) => item.assetType === "video").length,
+      0
+    ) + 1;
+    const videoResultId = makeId("video");
+    const videoBatch: GenerationBatch = {
+      id: makeId("video-batch"),
+      metadata: {
+        productName: sourceBatch?.metadata?.productName,
+        description: request.prompt,
+        innovationLevel: sourceBatch?.metadata?.innovationLevel || 0,
+        generationType: "video",
+        productImage: sourceBatch?.metadata?.productImage,
+        referenceImage: sourceBatch?.metadata?.referenceImage,
+        referenceImages: sourceBatch?.metadata?.referenceImages
+      },
+      results: [{
+        id: videoResultId,
+        assetType: "video",
+        title: `Video ${String(videoNumber).padStart(2, "0")}`,
+        prompt: request.prompt,
+        imageBase64: result.imageBase64,
+        videoStatus: "queued"
+      }]
+    };
+    const nextBatches = [...currentBatches, videoBatch];
+    generationBatchesRef.current = nextBatches;
+    setGenerationBatches(nextBatches);
+    setActiveGenerationBatchId(videoBatch.id);
+    void persistGeneratedBatch(videoBatch);
+    pushToast("info", "视频任务已创建，完成后会自动更新到画廊。");
+
+    try {
+      const preparedImage = await prepareImageForVision(result.imageBase64, 1600, 0.84);
+      const createResponse = await fetch("/api/video/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: preparedImage,
+          prompt: request.prompt,
+          ratio: request.ratio,
+          duration: request.duration,
+          resolution: request.resolution
+        })
+      });
+      const createPayload = await readApiResponse<{ taskId?: string; error?: string }>(createResponse);
+      if (!createResponse.ok || !createPayload.taskId) {
+        throw new Error(createPayload.error || "视频服务没有返回有效的任务编号。");
+      }
+
+      updateVideoGalleryResult(videoBatch.id, videoResultId, {
+        videoTaskId: createPayload.taskId,
+        videoStatus: "running"
+      });
+
+      for (let attempt = 0; attempt < 240; attempt += 1) {
+        await waitForImageJobPoll(attempt === 0 ? 2500 : 5000);
+        const statusResponse = await fetch(
+          `/api/video/status?taskId=${encodeURIComponent(createPayload.taskId)}`,
+          { cache: "no-store" }
+        );
+        const statusPayload = await readApiResponse<{
+          status?: GenerationResult["videoStatus"];
+          videoUrl?: string;
+          error?: string;
+        }>(statusResponse);
+        if (!statusResponse.ok) {
+          throw new Error(statusPayload.error || "视频任务查询失败。");
+        }
+
+        if (statusPayload.status === "succeeded" && statusPayload.videoUrl) {
+          const completedBatch = updateVideoGalleryResult(videoBatch.id, videoResultId, {
+            videoStatus: "succeeded",
+            videoUrl: statusPayload.videoUrl,
+            error: undefined
+          });
+          if (completedBatch) await persistGeneratedBatch(completedBatch);
+          pushToast("success", "视频已生成并保存到画廊。");
+          return;
+        }
+
+        if (statusPayload.status === "failed" || statusPayload.status === "cancelled") {
+          throw new Error(statusPayload.error || "视频服务未能完成当前任务。");
+        }
+
+        updateVideoGalleryResult(videoBatch.id, videoResultId, {
+          videoStatus: statusPayload.status || "running"
+        });
+      }
+
+      throw new Error("视频生成等待超时，请稍后重新尝试。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "视频生成失败，请稍后重试。";
+      const failedBatch = updateVideoGalleryResult(videoBatch.id, videoResultId, {
+        videoStatus: "failed",
+        error: message
+      });
+      if (failedBatch) await persistGeneratedBatch(failedBatch);
+      pushToast("error", message);
+    }
+  }
+
+  function updateVideoGalleryResult(
+    batchId: string,
+    resultId: string,
+    patch: Partial<GenerationResult>
+  ) {
+    let updatedBatch: GenerationBatch | undefined;
+    const nextBatches = generationBatchesRef.current.map((batch) => {
+      if (batch.id !== batchId) return batch;
+      updatedBatch = {
+        ...batch,
+        results: batch.results.map((item) => item.id === resultId ? { ...item, ...patch } : item)
+      };
+      return updatedBatch;
+    });
+    generationBatchesRef.current = nextBatches;
+    setGenerationBatches(nextBatches);
+    return updatedBatch;
+  }
+
   async function generateLocalEdit(result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) {
     if (!ensureAuthorized({ type: "local-edit", result, maskImageBase64, instruction, guideImageBase64 })) return;
     await generateLocalEditCore(result, maskImageBase64, instruction, guideImageBase64);
@@ -1315,8 +1503,8 @@ export default function Home() {
     try {
       const next = await Promise.all(
         imageFiles.map(async (file) => {
-          if (file.size > 20 * 1024 * 1024) {
-            throw new Error(`${file.name} 超过 20MB，请压缩后重新上传。`);
+          if (file.size > 25 * 1024 * 1024) {
+            throw new Error(`${file.name} 超过 25MB，请压缩后重新上传。`);
           }
           const originalDataUrl = await readFileAsDataUrl(file);
           const dataUrl = await prepareImageForVision(originalDataUrl, 1600, 0.82);
@@ -1451,6 +1639,7 @@ export default function Home() {
                     onGenerateFromPrompt={generateFromImagePrompt}
                     onGenerateDesignDescription={generateDesignDescription}
                     onModelGenerated={saveGeneratedModel}
+                    onGenerateVideo={generateVideo}
                     designDescriptionLoadingIds={designDescriptionLoadingIds}
                     onLocalEdit={generateLocalEdit}
                     onGenerateCustom={generateCustomCanvas}
@@ -1901,7 +2090,7 @@ async function readApiResponse<T>(response: Response): Promise<T> {
     return JSON.parse(responseText) as T;
   } catch {
     if (response.status === 413 || /request entity too large|payload too large/i.test(responseText)) {
-      throw new Error("上传图片数据过大，服务器未能接收。平台已尝试压缩图片，请刷新后重试。");
+      throw new Error("本次图片总数据仍超过服务器接收上限，请减少参考图数量或更换较小的图片后重试。");
     }
     if (!response.ok) {
       throw new Error(`服务请求失败（${response.status}），请稍后重试。`);

@@ -4,13 +4,14 @@ import { HardDrive, Package, Plus, SlidersHorizontal } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LocalGalleryStats } from "@/lib/local-gallery";
 import { getGalleryDraggedImage } from "@/lib/image";
-import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, GenerationBatch, GenerationMetadata, GenerationResult, GenerationSourceImage, GenerationStatus, UploadedImage } from "@/lib/types";
+import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, GenerationBatch, GenerationMetadata, GenerationResult, GenerationSourceImage, GenerationStatus, UploadedImage, VideoGenerationRequest } from "@/lib/types";
 import { downloadResultsZip } from "@/lib/zip";
 import { CustomCanvasEditorModal } from "./CustomCanvasEditorModal";
 import { ImagePreviewModal } from "./ImagePreviewModal";
 import { LocalHistoryModal } from "./LocalHistoryModal";
 import { ResultCard } from "./ResultCard";
 import { TripoModelViewer } from "./TripoModelViewer";
+import { VideoPreviewModal } from "./VideoPreviewModal";
 
 type GalleryProps = {
   isActive: boolean;
@@ -30,6 +31,7 @@ type GalleryProps = {
   onGenerateFromPrompt: (result: GenerationResult, instruction: string, referenceImages?: GenerationSourceImage[]) => void;
   onGenerateDesignDescription: (result: GenerationResult) => Promise<string>;
   onModelGenerated: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
+  onGenerateVideo: (result: GenerationResult, request: VideoGenerationRequest) => void;
   designDescriptionLoadingIds: string[];
   onLocalEdit: (
     result: GenerationResult,
@@ -66,6 +68,7 @@ export function Gallery({
   onGenerateFromPrompt,
   onGenerateDesignDescription,
   onModelGenerated,
+  onGenerateVideo,
   designDescriptionLoadingIds,
   onLocalEdit,
   onGenerateCustom,
@@ -82,6 +85,7 @@ export function Gallery({
 }: GalleryProps) {
   const [preview, setPreview] = useState<GenerationResult | null>(null);
   const [modelPreview, setModelPreview] = useState<GenerationResult | null>(null);
+  const [videoPreview, setVideoPreview] = useState<GenerationResult | null>(null);
   const [previewMetadata, setPreviewMetadata] = useState<GenerationMetadata | null>(null);
   const [previewStartsEditing, setPreviewStartsEditing] = useState(false);
   const [previewStartsModel, setPreviewStartsModel] = useState(false);
@@ -101,6 +105,12 @@ export function Gallery({
     const updatedPreview = allResults.find((result) => result.id === preview.id);
     if (updatedPreview && updatedPreview !== preview) setPreview(updatedPreview);
   }, [allResults, preview]);
+
+  useEffect(() => {
+    if (!videoPreview) return;
+    const updatedPreview = allResults.find((result) => result.id === videoPreview.id);
+    if (updatedPreview && updatedPreview !== videoPreview) setVideoPreview(updatedPreview);
+  }, [allResults, videoPreview]);
 
   async function handleZip() {
     try {
@@ -208,6 +218,7 @@ export function Gallery({
                           setPreview(selectedResult);
                         }}
                         onPreviewModel={setModelPreview}
+                        onPreviewVideo={setVideoPreview}
                         onEdit={(selectedResult) => {
                           setPreviewStartsEditing(true);
                           setPreviewStartsModel(false);
@@ -308,6 +319,12 @@ export function Gallery({
           setPreviewStartsEditing(false);
         }}
         onGenerateDesignDescription={onGenerateDesignDescription}
+        onGenerateVideo={(result, request) => {
+          onGenerateVideo(result, request);
+          setPreview(null);
+          setPreviewMetadata(null);
+          setPreviewStartsEditing(false);
+        }}
         onModelGenerated={onModelGenerated}
         isGeneratingDesignDescription={Boolean(preview && designDescriptionLoadingIds.includes(preview.id))}
         onLocalEdit={(result, maskImageBase64, instruction, guideImageBase64) => {
@@ -327,6 +344,7 @@ export function Gallery({
         filename={modelPreview?.title.trim().replace(/\s+/g, "-").toLowerCase() || "perdesign-model"}
         onClose={() => setModelPreview(null)}
       />
+      <VideoPreviewModal result={videoPreview} onClose={() => setVideoPreview(null)} />
       <LocalHistoryModal
         open={historyOpen}
         stats={historyStats}
@@ -367,6 +385,11 @@ export function Gallery({
             setCustomEditorOpen(false);
             setCustomSourceImage(null);
             onGenerateEcommercePoster(createCustomResult(request), request.productName, instruction);
+          }}
+          onGenerateVideo={(request, videoRequest) => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+            onGenerateVideo(createCustomResult(request), videoRequest);
           }}
           onOpenModelPanel={(request) => {
             setCustomEditorOpen(false);
@@ -437,8 +460,8 @@ function CustomCanvasTile({
       onError("请拖入 PNG、JPG、JPEG 或 WebP 图片。");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      onError("图片不能超过 10MB。");
+    if (file.size > 25 * 1024 * 1024) {
+      onError("图片不能超过 25MB。");
       return;
     }
 

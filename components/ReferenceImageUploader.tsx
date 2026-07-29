@@ -8,7 +8,7 @@ import type { UploadedImage } from "@/lib/types";
 import { getGalleryDraggedImage } from "@/lib/image";
 
 const MAX_IMAGES = 3;
-const MAX_SIZE = 10 * 1024 * 1024;
+const MAX_SIZE = 25 * 1024 * 1024;
 const ACCEPTED = ["image/png", "image/jpeg", "image/webp"];
 
 type ReferenceImageUploaderProps = {
@@ -58,7 +58,7 @@ export function ReferenceImageUploader({
 
     const oversized = imageFiles.find((file) => file.size > MAX_SIZE);
     if (oversized) {
-      onError(`图片“${oversized.name}”不能超过 10MB。`);
+      onError(`图片“${oversized.name}”不能超过 25MB。`);
       return;
     }
 

@@ -1,19 +1,21 @@
 import type { ModelOption, QualityOption, SizeOption } from "./types";
 
 export const brainModels: ModelOption[] = [
-  { label: "GPT-4o Mini", value: "gpt-4o-mini" },
-  { label: "GPT-4o", value: "gpt-4o" },
-  { label: "GPT-5", value: "gpt-5" },
-  { label: "Gemini 2.5 Pro", value: "gemini-2.5-pro" },
-  { label: "Gemini 2.5 Flash", value: "gemini-2.5-flash" },
-  { label: "Claude Sonnet 4", value: "claude-sonnet-4" }
+  { label: "GPT-5.6 Sol", value: "gpt-5.6-sol" },
+  { label: "GPT-5.6 Terra", value: "gpt-5.6-terra" },
+  { label: "GPT-5.6 Luna", value: "gpt-5.6-luna" },
+  { label: "GPT-5.5", value: "gpt-5.5" },
+  { label: "GPT-5.4", value: "gpt-5.4" },
+  { label: "GPT-5.4 Mini", value: "gpt-5.4-mini" }
 ];
 
 export const imageModels: ModelOption[] = [
   { label: "GPT Image 2", value: "gpt-image-2", supportsEdit: true },
-  { label: "GPT Image 1", value: "gpt-image-1", supportsEdit: true },
-  { label: "GPT Image 1.5", value: "gpt-image-1.5", supportsEdit: true },
-  { label: "GPT Image 1 Mini", value: "gpt-image-1-mini", supportsEdit: true }
+  { label: "GPT Image 2 Auto", value: "gpt-image-2-auto", supportsEdit: true },
+  { label: "GPT Image 2 N", value: "gpt-image-2-n", supportsEdit: true },
+  { label: "GPT Image 2 Eco", value: "gpt-image-2-eco", supportsEdit: true },
+  { label: "Gemini 3 Pro Image", value: "gemini-3-pro-image", supportsEdit: true },
+  { label: "Gemini 3.1 Flash Image", value: "gemini-3.1-flash-image", supportsEdit: true }
 ];
 
 export const sizeOptions: SizeOption[] = [

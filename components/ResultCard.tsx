@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { AlertTriangle, Box, Download, Maximize2, Mountain, Paintbrush, Rotate3D } from "lucide-react";
+import { AlertTriangle, Box, Clapperboard, Download, LoaderCircle, Maximize2, Mountain, Paintbrush, Play, Rotate3D } from "lucide-react";
 import { useRef } from "react";
 import type { GenerationResult } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
@@ -12,6 +12,7 @@ type ResultCardProps = {
   index: number;
   onPreview: (result: GenerationResult) => void;
   onPreviewModel: (result: GenerationResult) => void;
+  onPreviewVideo: (result: GenerationResult) => void;
   onEdit: (result: GenerationResult) => void;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
@@ -23,6 +24,7 @@ export function ResultCard({
   index,
   onPreview,
   onPreviewModel,
+  onPreviewVideo,
   onEdit,
   onGenerateMultiView,
   onGenerateScene,
@@ -31,10 +33,42 @@ export function ResultCard({
   const dragObjectUrlRef = useRef<string | null>(null);
   const filename = `concept-${String(index + 1).padStart(2, "0")}.png`;
   const isModel = result.assetType === "model3d" && Boolean(result.modelBlob);
+  const isVideo = result.assetType === "video";
 
   return (
     <article className="content-card overflow-hidden">
-      {isModel ? (
+      {isVideo ? (
+        <button
+          type="button"
+          className="model-result-card video-result-card"
+          onClick={() => onPreviewVideo(result)}
+          aria-label={result.videoStatus === "succeeded" ? "播放视频" : "查看视频任务"}
+          title={result.videoStatus === "succeeded" ? "播放视频" : "查看视频任务"}
+        >
+          {result.imageBase64 ? (
+            <img src={result.imageBase64} alt="" className="model-result-thumbnail" aria-hidden="true" />
+          ) : null}
+          <span className="model-result-shade" />
+          <span className="model-result-mark">
+            {result.videoStatus === "succeeded"
+              ? <Play className="h-7 w-7 fill-current" />
+              : result.videoStatus === "failed" || result.videoStatus === "cancelled"
+                ? <AlertTriangle className="h-7 w-7" />
+                : <LoaderCircle className="h-7 w-7 animate-spin" />}
+            <strong>
+              {result.videoStatus === "succeeded"
+                ? "播放"
+                : result.videoStatus === "failed" || result.videoStatus === "cancelled"
+                  ? "失败"
+                  : "生成中"}
+            </strong>
+          </span>
+          <span className="model-result-type">
+            <Clapperboard className="h-3.5 w-3.5" />
+            产品视频
+          </span>
+        </button>
+      ) : isModel ? (
         <button
           type="button"
           className="model-result-card"

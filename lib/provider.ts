@@ -6,8 +6,8 @@ type ProviderConfigInput = {
 type ProviderService = "chat" | "image";
 
 export const SERVER_MANAGED_API_KEY = "server-managed";
-export const DEFAULT_CHAT_PROVIDER_BASE_URL = "https://api-cn.65535.space/v1";
-export const DEFAULT_IMAGE_PROVIDER_BASE_URL = "https://img-cn.65535.space/v1";
+export const DEFAULT_CHAT_PROVIDER_BASE_URL = "https://api2.65535.space/v1";
+export const DEFAULT_IMAGE_PROVIDER_BASE_URL = "https://api2.65535.space/v1";
 
 export function resolveProviderConfig(input: ProviderConfigInput, service: ProviderService) {
   const servicePrefix = service === "image" ? "PERDESIGN_IMAGE" : "PERDESIGN_CHAT";

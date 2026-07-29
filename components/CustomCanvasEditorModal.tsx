@@ -3,14 +3,15 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Box, ChevronUp, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
+import { Box, ChevronUp, Clapperboard, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { downloadDataUrl, getGalleryDraggedImage } from "@/lib/image";
-import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage } from "@/lib/types";
+import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage, VideoGenerationRequest } from "@/lib/types";
 import { ImageSizeSelect } from "./ControlPanel";
 import { ImageUploader } from "./ImageUploader";
+import { VideoGenerationPanel } from "./VideoGenerationPanel";
 
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 25 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
 type CustomCanvasEditorModalProps = {
@@ -24,6 +25,7 @@ type CustomCanvasEditorModalProps = {
   onGenerateMultiView: (request: CustomCanvasGenerationRequest) => void;
   onGenerateScene: (request: CustomCanvasGenerationRequest) => void;
   onGenerateEcommercePoster: (request: CustomCanvasGenerationRequest, instruction?: string) => void;
+  onGenerateVideo: (request: CustomCanvasGenerationRequest, videoRequest: VideoGenerationRequest) => void;
   onOpenModelPanel: (request: CustomCanvasGenerationRequest) => void;
   onGenerateDivergence: (
     request: CustomCanvasGenerationRequest,
@@ -44,6 +46,7 @@ export function CustomCanvasEditorModal({
   onGenerateMultiView,
   onGenerateScene,
   onGenerateEcommercePoster,
+  onGenerateVideo,
   onOpenModelPanel,
   onGenerateDivergence,
   onError,
@@ -52,6 +55,7 @@ export function CustomCanvasEditorModal({
   const sourceInputRef = useRef<HTMLInputElement | null>(null);
   const divergenceFileInputRef = useRef<HTMLInputElement | null>(null);
   const ecommercePanelCloseTimerRef = useRef<number | null>(null);
+  const videoPanelCloseTimerRef = useRef<number | null>(null);
   const stageShellRef = useRef<HTMLDivElement | null>(null);
   const [sourceImage, setSourceImage] = useState<UploadedImage | null>(initialSourceImage);
   const [sourceDimensions, setSourceDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -68,6 +72,7 @@ export function CustomCanvasEditorModal({
   const [awaitingAuthorization, setAwaitingAuthorization] = useState(false);
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
   const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
+  const [isVideoPanelOpen, setIsVideoPanelOpen] = useState(false);
   const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
   const [divergenceReference, setDivergenceReference] = useState<GenerationSourceImage | undefined>();
@@ -80,6 +85,7 @@ export function CustomCanvasEditorModal({
       ecommercePanelCloseTimerRef.current = null;
     }
     setIsDivergenceOpen(false);
+    setIsVideoPanelOpen(false);
     setIsEcommercePanelOpen(true);
   }
 
@@ -90,6 +96,26 @@ export function CustomCanvasEditorModal({
     ecommercePanelCloseTimerRef.current = window.setTimeout(() => {
       setIsEcommercePanelOpen(false);
       ecommercePanelCloseTimerRef.current = null;
+    }, 140);
+  }
+
+  function keepVideoPanelOpen() {
+    if (videoPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(videoPanelCloseTimerRef.current);
+      videoPanelCloseTimerRef.current = null;
+    }
+    setIsEcommercePanelOpen(false);
+    setIsDivergenceOpen(false);
+    setIsVideoPanelOpen(true);
+  }
+
+  function scheduleVideoPanelClose() {
+    if (videoPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(videoPanelCloseTimerRef.current);
+    }
+    videoPanelCloseTimerRef.current = window.setTimeout(() => {
+      setIsVideoPanelOpen(false);
+      videoPanelCloseTimerRef.current = null;
     }, 140);
   }
 
@@ -105,6 +131,9 @@ export function CustomCanvasEditorModal({
   useEffect(() => () => {
     if (ecommercePanelCloseTimerRef.current !== null) {
       window.clearTimeout(ecommercePanelCloseTimerRef.current);
+    }
+    if (videoPanelCloseTimerRef.current !== null) {
+      window.clearTimeout(videoPanelCloseTimerRef.current);
     }
   }, []);
 
@@ -144,7 +173,7 @@ export function CustomCanvasEditorModal({
       return;
     }
     if (file.size > MAX_IMAGE_SIZE) {
-      onError("图片不能超过 10MB。");
+      onError("图片不能超过 25MB。");
       return;
     }
 
@@ -168,7 +197,7 @@ export function CustomCanvasEditorModal({
       return;
     }
     if (file.size > MAX_IMAGE_SIZE) {
-      setDivergenceUploadError("风格参考图不能超过 10MB。");
+      setDivergenceUploadError("风格参考图不能超过 25MB。");
       return;
     }
 
@@ -314,11 +343,13 @@ export function CustomCanvasEditorModal({
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isDivergenceOpen ? "active" : ""}`}
               onClick={() => {
                 setIsEcommercePanelOpen(false);
+                setIsVideoPanelOpen(false);
                 setIsDivergenceOpen((current) => !current);
               }}
               onMouseEnter={() => {
                 if (sourceImage && !busy) {
                   setIsEcommercePanelOpen(false);
+                  setIsVideoPanelOpen(false);
                   setIsDivergenceOpen(true);
                 }
               }}
@@ -328,6 +359,18 @@ export function CustomCanvasEditorModal({
             >
               <Sparkles className="h-4 w-4" />
               <span>{status === "generating" ? "生成中" : "创意发散"}</span>
+            </button>
+            <button
+              className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isVideoPanelOpen ? "active" : ""}`}
+              onClick={keepVideoPanelOpen}
+              onMouseEnter={keepVideoPanelOpen}
+              onMouseLeave={scheduleVideoPanelClose}
+              disabled={!sourceImage || busy}
+              title="生成视频"
+              aria-expanded={isVideoPanelOpen}
+            >
+              <Clapperboard className="h-4 w-4" />
+              <span>生成视频</span>
             </button>
             <button
               className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
@@ -411,6 +454,20 @@ export function CustomCanvasEditorModal({
               </button>
             </div>
           </section>
+        ) : null}
+
+        {isVideoPanelOpen ? (
+          <VideoGenerationPanel
+            disabled={!sourceImage || busy}
+            onClose={() => setIsVideoPanelOpen(false)}
+            onMouseEnter={keepVideoPanelOpen}
+            onMouseLeave={scheduleVideoPanelClose}
+            onSubmit={(videoRequest) => {
+              const request = getCurrentRequest();
+              if (!request) return;
+              onGenerateVideo(request, videoRequest);
+            }}
+          />
         ) : null}
 
         {isDivergenceOpen ? (

@@ -3,7 +3,7 @@ const nextConfig = {
   distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   experimental: {
     serverActions: {
-      bodySizeLimit: "15mb"
+      bodySizeLimit: "30mb"
     }
   }
 };

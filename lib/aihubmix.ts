@@ -264,7 +264,7 @@ export async function generateDesignPrompts(params: {
   const content = await callChatCompletion({
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
-    model: params.brainModel || "gpt-5",
+    model: params.brainModel || "gpt-5.5",
     temperature: 0.85,
     messages: [
       { role: "system", content: systemPrompt },

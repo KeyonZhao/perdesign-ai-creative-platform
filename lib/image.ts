@@ -121,7 +121,12 @@ export async function compositeMaskedEdit(
   return outputCanvas.toDataURL("image/png");
 }
 
-export function prepareImageForVision(dataUrl: string, maxDimension = 1280, quality = 0.76) {
+export function prepareImageForVision(
+  dataUrl: string,
+  maxDimension = 1280,
+  quality = 0.76,
+  maximumDataUrlLength = 900_000
+) {
   return new Promise<string>((resolve, reject) => {
     const image = new Image();
     image.onload = () => {
@@ -139,7 +144,6 @@ export function prepareImageForVision(dataUrl: string, maxDimension = 1280, qual
 
       let encoded = canvas.toDataURL("image/jpeg", quality);
       let currentQuality = quality;
-      const maximumDataUrlLength = 900_000;
       for (let attempt = 0; encoded.length > maximumDataUrlLength && attempt < 5; attempt += 1) {
         currentQuality = Math.max(0.46, currentQuality - 0.08);
         if (attempt >= 2 && Math.max(canvas.width, canvas.height) > 720) {
