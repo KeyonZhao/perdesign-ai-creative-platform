@@ -26,6 +26,7 @@ type ImagePreviewModalProps = {
   onGenerateDesignDescription?: (result: GenerationResult) => Promise<string>;
   onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) => void;
   onModelGenerated?: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
+  onDelete?: (result: GenerationResult) => void | Promise<void>;
   startEditing?: boolean;
   startModelPanel?: boolean;
   metadata?: GenerationMetadata | null;
@@ -62,6 +63,7 @@ export function ImagePreviewModal({
   onGenerateDesignDescription,
   onLocalEdit,
   onModelGenerated,
+  onDelete,
   startEditing = false,
   startModelPanel = false,
   metadata,
@@ -950,6 +952,15 @@ export function ImagePreviewModal({
             >
               <Download className="h-4 w-4" />
               <span>下载</span>
+            </button>
+            <button
+              className="btn-secondary image-preview-action image-preview-delete"
+              onClick={() => void onDelete?.(result)}
+              disabled={isGeneratingVariant}
+              title="删除图片"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>删除</span>
             </button>
           </div>
           <button className="btn-secondary image-preview-close" onClick={onClose} title="关闭">

@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { AlertTriangle, Box, Clapperboard, Download, LoaderCircle, Maximize2, Mountain, Paintbrush, Play, Rotate3D } from "lucide-react";
+import { AlertTriangle, Box, Clapperboard, Download, LoaderCircle, Maximize2, Mountain, Paintbrush, Play, Rotate3D, Trash2 } from "lucide-react";
 import { useRef } from "react";
 import type { GenerationResult } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
@@ -16,6 +16,7 @@ type ResultCardProps = {
   onEdit: (result: GenerationResult) => void;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
+  onDelete: () => void;
   isGeneratingVariant?: boolean;
 };
 
@@ -28,15 +29,31 @@ export function ResultCard({
   onEdit,
   onGenerateMultiView,
   onGenerateScene,
+  onDelete,
   isGeneratingVariant = false
 }: ResultCardProps) {
   const dragObjectUrlRef = useRef<string | null>(null);
   const filename = `concept-${String(index + 1).padStart(2, "0")}.png`;
   const isModel = result.assetType === "model3d" && Boolean(result.modelBlob);
   const isVideo = result.assetType === "video";
+  const showsCardDelete = Boolean(result.error) || isModel || isVideo;
 
   return (
-    <article className="content-card overflow-hidden">
+    <article className="content-card relative overflow-hidden">
+      {showsCardDelete ? (
+        <button
+          type="button"
+          className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-xl border border-red-200/20 bg-zinc-950/75 text-red-100 opacity-85 shadow-lg backdrop-blur transition hover:border-red-200/45 hover:bg-red-950/85 hover:opacity-100"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          aria-label={result.error ? "删除失败记录" : "从画廊删除"}
+          title={result.error ? "删除失败记录" : "从画廊删除"}
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      ) : null}
       {isVideo ? (
         <button
           type="button"

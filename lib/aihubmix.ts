@@ -365,6 +365,27 @@ export async function submitAsyncImageEdit(params: {
   size: string;
   quality: string;
 }) {
+  if (isApiMartProvider(params.baseUrl)) {
+    return submitApiMartImageGeneration({
+      baseUrl: params.baseUrl,
+      apiKey: params.apiKey,
+      imageModel: params.imageModel,
+      prompt: params.useExactPrompt
+        ? params.prompt.trim()
+        : buildImageEditPrompt(params.prompt, {
+            ...params,
+            hasMaskGuideImage: Boolean(params.maskImage && !params.hasLocalEditGuide)
+          }),
+      inputImages: [
+        ...params.inputImages,
+        ...(params.maskImage ? [params.maskImage] : [])
+      ],
+      size: params.size,
+      quality: params.quality,
+      source: "images/edits"
+    });
+  }
+
   const model = imageModels.find((item) => item.value === params.imageModel);
   if (model && model.supportsEdit === false) {
     throw new Error("当前生图模型不支持图片编辑接口，请更换支持 image edit 的模型。");
@@ -491,6 +512,21 @@ export async function submitAsyncImageGeneration(params: {
   size: string;
   quality: string;
 }) {
+  if (isApiMartProvider(params.baseUrl)) {
+    return submitApiMartImageGeneration({
+      baseUrl: params.baseUrl,
+      apiKey: params.apiKey,
+      imageModel: params.imageModel,
+      prompt: params.useExactPrompt
+        ? params.prompt.trim()
+        : buildImageGenerationPrompt(params.prompt, params.innovationLevel),
+      inputImages: [],
+      size: params.size,
+      quality: params.quality,
+      source: "images/generations"
+    });
+  }
+
   const endpoint = `${resolveBaseUrl(params.baseUrl)}/images/generations`;
   const generationPrompt = params.useExactPrompt
     ? params.prompt.trim()
@@ -578,7 +614,9 @@ export async function getAsyncImageJob(params: {
     throw new Error("生图任务编号无效。");
   }
 
-  const endpoint = `${resolveBaseUrl(params.baseUrl)}/images/async-generations/${encodeURIComponent(jobId)}`;
+  const endpoint = isApiMartProvider(params.baseUrl)
+    ? `${resolveBaseUrl(params.baseUrl)}/tasks/${encodeURIComponent(jobId)}`
+    : `${resolveBaseUrl(params.baseUrl)}/images/async-generations/${encodeURIComponent(jobId)}`;
   let response: Response;
   try {
     response = await fetchWithRetry(
@@ -873,7 +911,14 @@ function buildReferenceWeightInstruction(weight: number) {
 
 function parseAsyncImageSubmission(json: unknown, source: string): AsyncImageSubmission {
   const record = unwrapAsyncJobRecord(json);
-  const jobId = String(record.job_id || record.jobId || record.id || "").trim();
+  const jobId = String(
+    record.job_id ||
+    record.jobId ||
+    record.task_id ||
+    record.taskId ||
+    record.id ||
+    ""
+  ).trim();
   if (!jobId) {
     throw new Error(`图片接口没有返回异步任务编号。来源：${source}。返回结构：${summarizeImagePayload(json)}`);
   }
@@ -890,9 +935,35 @@ function unwrapAsyncJobRecord(json: unknown): Record<string, unknown> {
   const record = json as Record<string, unknown>;
   for (const key of ["task", "job", "data"]) {
     const nested = record[key];
+    if (Array.isArray(nested)) {
+      const firstRecord = nested.find(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item)
+      );
+      if (
+        firstRecord &&
+        (
+          firstRecord.job_id ||
+          firstRecord.jobId ||
+          firstRecord.task_id ||
+          firstRecord.taskId ||
+          firstRecord.id ||
+          firstRecord.status
+        )
+      ) {
+        return firstRecord;
+      }
+    }
     if (nested && typeof nested === "object" && !Array.isArray(nested)) {
       const nestedRecord = nested as Record<string, unknown>;
-      if (nestedRecord.job_id || nestedRecord.jobId || nestedRecord.id || nestedRecord.status) {
+      if (
+        nestedRecord.job_id ||
+        nestedRecord.jobId ||
+        nestedRecord.task_id ||
+        nestedRecord.taskId ||
+        nestedRecord.id ||
+        nestedRecord.status
+      ) {
         return nestedRecord;
       }
     }
@@ -920,6 +991,21 @@ function getAsyncJobResultUrl(record: Record<string, unknown>): string {
     const resultRecord = result as Record<string, unknown>;
     const nestedUrl: string = getAsyncJobResultUrl(resultRecord);
     if (nestedUrl) return nestedUrl;
+  }
+
+  const images = record.images;
+  if (Array.isArray(images)) {
+    for (const image of images) {
+      if (!image || typeof image !== "object" || Array.isArray(image)) continue;
+      const url = (image as Record<string, unknown>).url;
+      if (Array.isArray(url)) {
+        const firstUrl = url.find((value): value is string =>
+          typeof value === "string" && /^https?:\/\//i.test(value)
+        );
+        if (firstUrl) return firstUrl;
+      }
+      if (typeof url === "string" && /^https?:\/\//i.test(url)) return url;
+    }
   }
 
   const data = record.data;
@@ -1140,6 +1226,84 @@ export function failedResult(concept: ConceptPrompt, error: unknown, index: numb
 function resolveBaseUrl(value?: string) {
   const normalized = String(value || "https://aihubmix.com/v1").trim().replace(/\/+$/, "");
   return normalized;
+}
+
+function isApiMartProvider(baseUrl?: string) {
+  return /\/apimart(?:\/|$)/i.test(resolveBaseUrl(baseUrl));
+}
+
+async function submitApiMartImageGeneration(params: {
+  baseUrl?: string;
+  apiKey: string;
+  imageModel: string;
+  prompt: string;
+  inputImages: string[];
+  size: string;
+  quality: string;
+  source: "images/edits" | "images/generations";
+}): Promise<AsyncImageSubmission> {
+  const endpoint = `${resolveBaseUrl(params.baseUrl)}/images/generations`;
+  const { size, resolution } = toApiMartImageDimensions(params.size);
+  await writeImageDebugLog({
+    phase: "request",
+    source: params.source,
+    transport: "apimart",
+    endpoint,
+    model: params.imageModel,
+    size,
+    resolution,
+    quality: params.quality,
+    inputImageCount: params.inputImages.length,
+    promptPreview: clipText(params.prompt, 500)
+  });
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: params.imageModel,
+      prompt: params.prompt,
+      n: 1,
+      ...(size ? { size } : {}),
+      ...(resolution ? { resolution } : {}),
+      ...(params.quality !== "auto" ? { quality: params.quality } : {}),
+      ...(params.inputImages.length ? { image_urls: params.inputImages } : {}),
+      official_fallback: false
+    })
+  });
+
+  const text = await response.text();
+  await writeImageDebugLog({
+    phase: "response",
+    source: params.source,
+    transport: "apimart",
+    endpoint,
+    status: response.status,
+    ok: response.ok,
+    headers: summarizeHeaders(response.headers),
+    bodyPreview: clipText(text, 4000)
+  });
+  if (!response.ok) throw new Error(getFriendlyAiError(response.status, text));
+
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error("ApiMart 生图接口返回了无法解析的结果。");
+  }
+  return parseAsyncImageSubmission(json, params.source);
+}
+
+function toApiMartImageDimensions(value: string) {
+  if (value === "1024x1024") return { size: "1:1", resolution: value };
+  if (value === "1536x1024") return { size: "3:2", resolution: value };
+  if (value === "1024x1536") return { size: "2:3", resolution: value };
+  return value === "auto"
+    ? { size: "", resolution: "" }
+    : { size: value, resolution: value };
 }
 
 function isGuideOnlyLocalEditProvider(baseUrl?: string) {

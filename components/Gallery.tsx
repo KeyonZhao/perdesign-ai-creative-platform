@@ -49,6 +49,7 @@ type GalleryProps = {
   onExportProject: () => Promise<void>;
   onImportProject: (file: File) => Promise<void>;
   onClearHistory: () => Promise<void>;
+  onDeleteResult: (resultId: string) => Promise<boolean>;
   onError: (message: string) => void;
   onSuccess: (message: string) => void;
 };
@@ -81,6 +82,7 @@ export function Gallery({
   onExportProject,
   onImportProject,
   onClearHistory,
+  onDeleteResult,
   isGeneratingVariant = false
 }: GalleryProps) {
   const [preview, setPreview] = useState<GenerationResult | null>(null);
@@ -95,6 +97,7 @@ export function Gallery({
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
   const activeBatchRef = useRef<HTMLDivElement | null>(null);
   const pendingBatchRef = useRef<HTMLDivElement | null>(null);
+  const preservedScrollTopRef = useRef<number | null>(null);
   const hasPositionedGalleryRef = useRef(false);
   const wasActiveRef = useRef(false);
   const allResults = useMemo(() => batches.flatMap((batch) => batch.results), [batches]);
@@ -121,7 +124,22 @@ export function Gallery({
     }
   }
 
+  async function handleDeleteResult(resultId: string) {
+    preservedScrollTopRef.current = scrollAreaRef.current?.scrollTop ?? null;
+    const deleted = await onDeleteResult(resultId);
+    if (!deleted) preservedScrollTopRef.current = null;
+    return deleted;
+  }
+
   useLayoutEffect(() => {
+    if (preservedScrollTopRef.current !== null) {
+      if (scrollAreaRef.current) {
+        scrollAreaRef.current.scrollTop = preservedScrollTopRef.current;
+      }
+      preservedScrollTopRef.current = null;
+      return;
+    }
+
     if (!isActive) {
       wasActiveRef.current = false;
       return;
@@ -227,6 +245,7 @@ export function Gallery({
                         }}
                         onGenerateMultiView={onGenerateMultiView}
                         onGenerateScene={onGenerateScene}
+                        onDelete={() => void handleDeleteResult(result.id)}
                         isGeneratingVariant={isGeneratingVariant}
                       />
                   </div>
@@ -334,6 +353,15 @@ export function Gallery({
           setPreviewStartsEditing(false);
         }}
         isGeneratingVariant={isGeneratingVariant}
+        onDelete={async (result) => {
+          const deleted = await handleDeleteResult(result.id);
+          if (deleted) {
+            setPreview(null);
+            setPreviewMetadata(null);
+            setPreviewStartsEditing(false);
+            setPreviewStartsModel(false);
+          }
+        }}
       />
       <TripoModelViewer
         open={Boolean(modelPreview)}

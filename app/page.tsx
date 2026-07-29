@@ -21,6 +21,7 @@ import { Toast } from "@/components/Toast";
 import { VentEditor } from "@/components/VentEditor";
 import {
   clearLocalGenerationBatches,
+  deleteLocalGenerationBatch,
   getLocalGalleryStats,
   loadLocalGenerationBatches,
   replaceLocalGenerationBatches,
@@ -70,7 +71,7 @@ const storageKeys = {
 
 const BRAIN_MODEL = "gpt-5.5";
 const AUTH_CODE = "perdesignsg";
-const DEFAULT_IMAGE_API_BASE_URL = "https://api2.65535.space/v1";
+const DEFAULT_IMAGE_API_BASE_URL = "https://task-api-1.65535.space/apimart/v1";
 const DEFAULT_CHAT_API_BASE_URL = "https://api2.65535.space/v1";
 const SCENE_GENERATION_PROMPT = "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图";
 const PRESET_CHAT_API_KEY = "server-managed";
@@ -500,6 +501,50 @@ export default function Home() {
       pushToast("success", "本地历史作品已清空。");
     } catch (error) {
       pushToast("error", error instanceof Error ? error.message : "本地历史清空失败。");
+    }
+  }
+
+  async function deleteGalleryResult(resultId: string) {
+    const currentBatches = generationBatchesRef.current;
+    const targetBatch = currentBatches.find((batch) =>
+      batch.results.some((result) => result.id === resultId)
+    );
+    if (!targetBatch) return false;
+
+    const targetResult = targetBatch.results.find((result) => result.id === resultId);
+    const label = targetResult?.error ? "这个失败记录" : "这个画廊项目";
+    if (!window.confirm(`确定删除${label}吗？删除后无法恢复。`)) return false;
+
+    try {
+      const remainingResults = targetBatch.results.filter((result) => result.id !== resultId);
+      const nextBatches = remainingResults.length
+        ? currentBatches.map((batch) =>
+            batch.id === targetBatch.id ? { ...batch, results: remainingResults } : batch
+          )
+        : currentBatches.filter((batch) => batch.id !== targetBatch.id);
+
+      generationBatchesRef.current = nextBatches;
+      setGenerationBatches(nextBatches);
+      if (activeGenerationBatchId === targetBatch.id && !remainingResults.length) {
+        setActiveGenerationBatchId(nextBatches.at(-1)?.id || null);
+      }
+
+      if (remainingResults.length) {
+        await saveLocalGenerationBatch({ ...targetBatch, results: remainingResults });
+      } else {
+        await deleteLocalGenerationBatch(targetBatch.id);
+      }
+
+      const pendingJobId = resultId.startsWith("async-job-")
+        ? resultId.slice("async-job-".length)
+        : "";
+      if (pendingJobId) removePendingImageJob(pendingJobId);
+      await refreshHistoryStats();
+      pushToast("success", "已从画廊删除。");
+      return true;
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "删除失败，请稍后重试。");
+      return false;
     }
   }
 
@@ -1652,6 +1697,7 @@ export default function Home() {
                     onExportProject={exportLocalProject}
                     onImportProject={importLocalProject}
                     onClearHistory={clearLocalHistory}
+                    onDeleteResult={deleteGalleryResult}
                     onError={(message) => pushToast("error", message)}
                     onSuccess={(message) => pushToast("success", message)}
                   />

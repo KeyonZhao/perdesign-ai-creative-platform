@@ -1359,6 +1359,17 @@ textarea {
   box-shadow: 0 0 18px rgba(86, 63, 255, 0.2);
 }
 
+.image-preview-action.image-preview-delete {
+  border-color: rgba(248, 113, 113, 0.22);
+  color: #fecaca;
+}
+
+.image-preview-action.image-preview-delete:hover:not(:disabled),
+.image-preview-action.image-preview-delete:focus-visible:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.48);
+  background: rgba(127, 29, 29, 0.34);
+}
+
 .image-preview-close {
   width: 36px;
   padding: 0;

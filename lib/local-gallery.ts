@@ -63,6 +63,17 @@ export async function saveLocalGenerationBatch(batch: GenerationBatch) {
   }
 }
 
+export async function deleteLocalGenerationBatch(batchId: string) {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(BATCH_STORE, "readwrite");
+    transaction.objectStore(BATCH_STORE).delete(batchId);
+    await transactionDone(transaction);
+  } finally {
+    database.close();
+  }
+}
+
 export async function replaceLocalGenerationBatches(batches: GenerationBatch[]) {
   const storedBatches = await Promise.all(batches.map((batch, index) => storeBatch(batch, Date.now() + index)));
   const database = await openDatabase();

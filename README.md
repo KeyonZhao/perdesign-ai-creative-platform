@@ -18,7 +18,7 @@ npm run dev
 ```txt
 PERDESIGN_CHAT_BASE_URL=https://api2.65535.space/v1
 PERDESIGN_CHAT_API_KEY=your_chat_api_key_here
-PERDESIGN_IMAGE_BASE_URL=https://api2.65535.space/v1
+PERDESIGN_IMAGE_BASE_URL=https://task-api-1.65535.space/apimart/v1
 PERDESIGN_IMAGE_API_KEY=your_image_api_key_here
 TRIPO_API_KEY=your_tripo_api_key_here
 # 可选，默认使用 P1-20260311
