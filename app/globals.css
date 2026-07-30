@@ -1069,6 +1069,17 @@ textarea {
   background: rgba(30, 30, 34, 0.76);
 }
 
+.btn-secondary.result-card-action.result-card-delete {
+  border-color: rgba(254, 202, 202, 0.24);
+  color: rgb(254 226 226);
+}
+
+.btn-secondary.result-card-action.result-card-delete:hover:not(:disabled) {
+  border-color: rgba(254, 202, 202, 0.5);
+  background: rgba(69, 10, 10, 0.9);
+  color: rgb(254 242 242);
+}
+
 .content-card {
   overflow: hidden;
   border: 1px solid var(--line);

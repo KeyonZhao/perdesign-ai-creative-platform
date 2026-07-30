@@ -120,9 +120,9 @@ export function ResultCard({
               }}
             />
           </button>
-          <div className="pointer-events-none absolute inset-0 flex items-end justify-center gap-2 bg-black/0 pb-4 opacity-0 transition group-hover:bg-black/28 group-hover:opacity-100">
+          <div className="pointer-events-none absolute inset-0 flex items-end justify-center gap-1 bg-black/0 pb-4 opacity-0 transition group-hover:bg-black/28 group-hover:opacity-100">
             <button
-              className="btn-secondary result-card-action pointer-events-auto flex h-10 w-10 items-center justify-center rounded-[12px] disabled:cursor-not-allowed disabled:opacity-45"
+              className="btn-secondary result-card-action pointer-events-auto flex h-9 w-9 items-center justify-center rounded-[12px] disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => onEdit(result)}
               disabled={isGeneratingVariant}
               aria-label="局部修改"
@@ -131,7 +131,7 @@ export function ResultCard({
               <Paintbrush className="h-4 w-4" />
             </button>
             <button
-              className="btn-secondary result-card-action pointer-events-auto flex h-10 w-10 items-center justify-center rounded-[12px] disabled:cursor-not-allowed disabled:opacity-45"
+              className="btn-secondary result-card-action pointer-events-auto flex h-9 w-9 items-center justify-center rounded-[12px] disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => onGenerateScene(result)}
               disabled={isGeneratingVariant}
               aria-label="生成场景图"
@@ -140,7 +140,7 @@ export function ResultCard({
               <Mountain className="h-4 w-4" />
             </button>
             <button
-              className="btn-secondary result-card-action pointer-events-auto flex h-10 w-10 items-center justify-center rounded-[12px] disabled:cursor-not-allowed disabled:opacity-45"
+              className="btn-secondary result-card-action pointer-events-auto flex h-9 w-9 items-center justify-center rounded-[12px] disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() => onGenerateMultiView(result)}
               disabled={isGeneratingVariant}
               aria-label="生成多视图"
@@ -149,7 +149,7 @@ export function ResultCard({
               <Rotate3D className="h-4 w-4" />
             </button>
             <button
-              className="btn-secondary result-card-action pointer-events-auto flex h-10 w-10 items-center justify-center rounded-[12px]"
+              className="btn-secondary result-card-action pointer-events-auto flex h-9 w-9 items-center justify-center rounded-[12px]"
               onClick={() => downloadDataUrl(result.imageBase64!, filename)}
               aria-label="下载图片"
               title="下载图片"
@@ -157,12 +157,23 @@ export function ResultCard({
               <Download className="h-4 w-4" />
             </button>
             <button
-              className="btn-secondary result-card-action pointer-events-auto flex h-10 w-10 items-center justify-center rounded-[12px]"
+              className="btn-secondary result-card-action pointer-events-auto flex h-9 w-9 items-center justify-center rounded-[12px]"
               onClick={() => onPreview(result)}
               aria-label="查看大图"
               title="查看大图"
             >
               <Maximize2 className="h-4 w-4" />
+            </button>
+            <button
+              className="btn-secondary result-card-action result-card-delete pointer-events-auto flex h-9 w-9 items-center justify-center rounded-[12px]"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete();
+              }}
+              aria-label="从画廊删除"
+              title="从画廊删除"
+            >
+              <Trash2 className="h-4 w-4" />
             </button>
           </div>
         </div>
