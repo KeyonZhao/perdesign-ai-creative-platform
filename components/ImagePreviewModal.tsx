@@ -98,6 +98,12 @@ export function ImagePreviewModal({
   const [imagePromptUploadError, setImagePromptUploadError] = useState("");
   const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
   const [isVideoPanelOpen, setIsVideoPanelOpen] = useState(false);
+  const [videoRequestDraft, setVideoRequestDraft] = useState<VideoGenerationRequest>({
+    prompt: "",
+    ratio: "16:9",
+    duration: 5,
+    resolution: "720p"
+  });
   const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
@@ -138,6 +144,12 @@ export function ImagePreviewModal({
     setImagePromptUploadError("");
     setIsEcommercePanelOpen(false);
     setIsVideoPanelOpen(false);
+    setVideoRequestDraft({
+      prompt: "",
+      ratio: "16:9",
+      duration: 5,
+      resolution: "720p"
+    });
     setEcommerceInstruction("");
     setIsDivergenceOpen(false);
     setDivergenceStyleIds([]);
@@ -218,9 +230,13 @@ export function ImagePreviewModal({
       window.clearTimeout(ecommercePanelCloseTimerRef.current);
     }
     ecommercePanelCloseTimerRef.current = window.setTimeout(() => {
+      if (document.activeElement?.closest(".ecommerce-poster-panel")) {
+        ecommercePanelCloseTimerRef.current = null;
+        return;
+      }
       setIsEcommercePanelOpen(false);
       ecommercePanelCloseTimerRef.current = null;
-    }, 140);
+    }, 520);
   }
 
   function keepDivergenceOpen() {
@@ -240,9 +256,13 @@ export function ImagePreviewModal({
       window.clearTimeout(divergenceCloseTimerRef.current);
     }
     divergenceCloseTimerRef.current = window.setTimeout(() => {
+      if (document.activeElement?.closest(".divergence-panel")) {
+        divergenceCloseTimerRef.current = null;
+        return;
+      }
       setIsDivergenceOpen(false);
       divergenceCloseTimerRef.current = null;
-    }, 140);
+    }, 520);
   }
 
   function openDivergenceFilePicker() {
@@ -276,9 +296,13 @@ export function ImagePreviewModal({
       window.clearTimeout(modelPanelCloseTimerRef.current);
     }
     modelPanelCloseTimerRef.current = window.setTimeout(() => {
+      if (document.activeElement?.closest(".model-generation-panel")) {
+        modelPanelCloseTimerRef.current = null;
+        return;
+      }
       setIsModelPanelOpen(false);
       modelPanelCloseTimerRef.current = null;
-    }, 140);
+    }, 520);
   }
 
   function keepVideoPanelOpen() {
@@ -297,9 +321,13 @@ export function ImagePreviewModal({
       window.clearTimeout(videoPanelCloseTimerRef.current);
     }
     videoPanelCloseTimerRef.current = window.setTimeout(() => {
+      if (document.activeElement?.closest(".video-generation-panel")) {
+        videoPanelCloseTimerRef.current = null;
+        return;
+      }
       setIsVideoPanelOpen(false);
       videoPanelCloseTimerRef.current = null;
-    }, 140);
+    }, 520);
   }
 
   if (!result?.imageBase64) return null;
@@ -1162,6 +1190,8 @@ export function ImagePreviewModal({
         {isVideoPanelOpen && !isEditing ? (
           <VideoGenerationPanel
             disabled={isGeneratingVariant}
+            value={videoRequestDraft}
+            onChange={setVideoRequestDraft}
             onClose={() => setIsVideoPanelOpen(false)}
             onMouseEnter={keepVideoPanelOpen}
             onMouseLeave={scheduleVideoPanelClose}

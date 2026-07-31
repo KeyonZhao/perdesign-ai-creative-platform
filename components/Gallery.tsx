@@ -8,6 +8,7 @@ import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, Generati
 import { downloadResultsZip } from "@/lib/zip";
 import { CustomCanvasEditorModal } from "./CustomCanvasEditorModal";
 import { ImagePreviewModal } from "./ImagePreviewModal";
+import { ImageGenerationProgress } from "./ImageGenerationProgress";
 import { LocalHistoryModal } from "./LocalHistoryModal";
 import { ResultCard } from "./ResultCard";
 import { TripoModelViewer } from "./TripoModelViewer";
@@ -98,10 +99,42 @@ export function Gallery({
   const activeBatchRef = useRef<HTMLDivElement | null>(null);
   const pendingBatchRef = useRef<HTMLDivElement | null>(null);
   const preservedScrollTopRef = useRef<number | null>(null);
+  const allResults = useMemo(() => batches.flatMap((batch) => batch.results), [batches]);
+  const generationStartedAtRef = useRef(Date.now());
+  const generationSessionBatchIdRef = useRef<string | null>(null);
+  const knownResultIdsRef = useRef(new Set(allResults.map((result) => result.id)));
+  const [revealingResultIds, setRevealingResultIds] = useState<string[]>([]);
   const hasPositionedGalleryRef = useRef(false);
   const wasActiveRef = useRef(false);
-  const allResults = useMemo(() => batches.flatMap((batch) => batch.results), [batches]);
   const isGenerating = status === "generating";
+
+  if (isGenerating && generationSessionBatchIdRef.current !== activeBatchId) {
+    generationStartedAtRef.current = Date.now();
+    generationSessionBatchIdRef.current = activeBatchId;
+  }
+
+  useEffect(() => {
+    const knownIds = knownResultIdsRef.current;
+    const newResultIds = allResults
+      .filter((result) => !knownIds.has(result.id))
+      .map((result) => result.id);
+    allResults.forEach((result) => knownIds.add(result.id));
+    if (!newResultIds.length || !generationSessionBatchIdRef.current) return;
+
+    const activeSessionResultIds = new Set(
+      batches
+        .find((batch) => batch.id === generationSessionBatchIdRef.current)
+        ?.results.map((result) => result.id) || []
+    );
+    const idsToReveal = newResultIds.filter((id) => activeSessionResultIds.has(id));
+    if (!idsToReveal.length) return;
+
+    setRevealingResultIds((current) => Array.from(new Set([...current, ...idsToReveal])));
+    const timer = window.setTimeout(() => {
+      setRevealingResultIds((current) => current.filter((id) => !idsToReveal.includes(id)));
+    }, 720);
+    return () => window.clearTimeout(timer);
+  }, [allResults, batches]);
 
   useEffect(() => {
     if (!preview) return;
@@ -225,7 +258,7 @@ export function Gallery({
                 const startIndex = batches.slice(0, batchIndex).reduce((sum, item) => sum + item.results.length, 0);
 
                 return batch.results.map((result, index) => (
-                  <div key={result.id} ref={isActiveBatch && index === 0 ? activeBatchRef : null} className="gallery-batch">
+                  <div key={result.id} ref={isActiveBatch && index === 0 ? activeBatchRef : null} className="gallery-batch relative overflow-hidden">
                       <ResultCard
                         result={result}
                         index={startIndex + index}
@@ -248,13 +281,18 @@ export function Gallery({
                         onDelete={() => void handleDeleteResult(result.id)}
                         isGeneratingVariant={isGeneratingVariant}
                       />
+                      {revealingResultIds.includes(result.id) ? (
+                        <ImageGenerationProgress startedAt={generationStartedAtRef.current} finishing />
+                      ) : null}
                   </div>
                 ));
               })}
               {status === "generating"
                 ? Array.from({ length: count }).map((_, index) => (
                     <div key={`pending-${index}`} ref={index === 0 ? pendingBatchRef : null} className="content-card gallery-batch overflow-hidden">
-                      <div className="skeleton aspect-square w-full" />
+                      <div className="skeleton relative aspect-square w-full overflow-hidden">
+                        <ImageGenerationProgress startedAt={generationStartedAtRef.current} />
+                      </div>
                     </div>
                   ))
                 : null}

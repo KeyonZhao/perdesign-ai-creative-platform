@@ -6,6 +6,8 @@ import type { VideoGenerationRequest } from "@/lib/types";
 
 type VideoGenerationPanelProps = {
   disabled?: boolean;
+  value?: VideoGenerationRequest;
+  onChange?: (request: VideoGenerationRequest) => void;
   onClose: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -17,15 +19,26 @@ const DEFAULT_VIDEO_PROMPT =
 
 export function VideoGenerationPanel({
   disabled = false,
+  value,
+  onChange,
   onClose,
   onMouseEnter,
   onMouseLeave,
   onSubmit
 }: VideoGenerationPanelProps) {
-  const [prompt, setPrompt] = useState("");
-  const [ratio, setRatio] = useState<VideoGenerationRequest["ratio"]>("16:9");
-  const [duration, setDuration] = useState<VideoGenerationRequest["duration"]>(5);
-  const [resolution, setResolution] = useState<VideoGenerationRequest["resolution"]>("720p");
+  const [localValue, setLocalValue] = useState<VideoGenerationRequest>({
+    prompt: "",
+    ratio: "16:9",
+    duration: 5,
+    resolution: "720p"
+  });
+  const currentValue = value ?? localValue;
+
+  function updateValue(patch: Partial<VideoGenerationRequest>) {
+    const nextValue = { ...currentValue, ...patch };
+    if (!value) setLocalValue(nextValue);
+    onChange?.(nextValue);
+  }
 
   return (
     <section
@@ -52,8 +65,8 @@ export function VideoGenerationPanel({
 
       <textarea
         className="ecommerce-poster-instruction video-generation-prompt"
-        value={prompt}
-        onChange={(event) => setPrompt(event.target.value)}
+        value={currentValue.prompt}
+        onChange={(event) => updateValue({ prompt: event.target.value })}
         placeholder="例如：镜头从左前方缓慢环绕至右侧，展示旋钮操作和材质反光。"
         maxLength={1000}
         rows={3}
@@ -63,46 +76,46 @@ export function VideoGenerationPanel({
       <div className="video-generation-options">
         <VideoOptionGroup
           label="画幅"
-          value={ratio}
+          value={currentValue.ratio}
           options={[
             { label: "横屏", value: "16:9" },
             { label: "竖屏", value: "9:16" },
             { label: "方形", value: "1:1" }
           ]}
-          onChange={(value) => setRatio(value as VideoGenerationRequest["ratio"])}
+          onChange={(ratio) => updateValue({ ratio: ratio as VideoGenerationRequest["ratio"] })}
         />
         <VideoOptionGroup
           label="时长"
-          value={String(duration)}
+          value={String(currentValue.duration)}
           options={[
             { label: "5 秒", value: "5" },
             { label: "10 秒", value: "10" }
           ]}
-          onChange={(value) => setDuration(value === "10" ? 10 : 5)}
+          onChange={(duration) => updateValue({ duration: duration === "10" ? 10 : 5 })}
         />
         <VideoOptionGroup
           label="清晰度"
-          value={resolution}
+          value={currentValue.resolution}
           options={[
             { label: "720P", value: "720p" },
             { label: "1080P", value: "1080p" }
           ]}
-          onChange={(value) => setResolution(value as VideoGenerationRequest["resolution"])}
+          onChange={(resolution) =>
+            updateValue({ resolution: resolution as VideoGenerationRequest["resolution"] })
+          }
         />
       </div>
 
       <div className="ecommerce-poster-panel-footer">
-        <span>{prompt.length}/1000</span>
+        <span>{currentValue.prompt.length}/1000</span>
         <button
           type="button"
           className="ecommerce-poster-submit"
           disabled={disabled}
           onClick={() =>
             onSubmit({
-              prompt: prompt.trim() || DEFAULT_VIDEO_PROMPT,
-              ratio,
-              duration,
-              resolution
+              ...currentValue,
+              prompt: currentValue.prompt.trim() || DEFAULT_VIDEO_PROMPT
             })
           }
         >

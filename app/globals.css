@@ -424,6 +424,89 @@ textarea {
   position: relative;
 }
 
+.image-generation-progress {
+  position: absolute;
+  z-index: 12;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 22px;
+  overflow: hidden;
+  background: rgba(16, 16, 18, 0.36);
+  color: #f4f4f5;
+}
+
+.image-generation-progress.finishing {
+  background: rgba(16, 16, 18, 0.72);
+  backdrop-filter: blur(10px);
+  animation: generationReveal 720ms ease forwards;
+}
+
+.image-generation-progress-glow {
+  position: absolute;
+  width: 70%;
+  aspect-ratio: 1;
+  top: 4%;
+  left: 15%;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08), transparent 68%);
+  animation: generationGlow 2.8s ease-in-out infinite;
+}
+
+.image-generation-progress-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+.image-generation-progress-meta,
+.image-generation-progress-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.image-generation-progress-meta {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.image-generation-progress-meta span:last-child {
+  color: rgba(255, 255, 255, 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.image-generation-progress-track {
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.image-generation-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.24);
+  transition: width 300ms ease-out;
+}
+
+.image-generation-progress-detail {
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 10px;
+}
+
+.image-generation-progress-detail span:last-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .gallery-header {
   display: flex;
   align-items: center;
@@ -4498,6 +4581,28 @@ textarea {
   }
 }
 
+@keyframes generationGlow {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes generationReveal {
+  0%,
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 @keyframes thinkingPulse {
   0%,
   80%,
@@ -4711,6 +4816,18 @@ textarea {
   background: rgb(24 24 27 / 0.96);
   box-shadow: 0 18px 48px rgb(0 0 0 / 0.42);
   backdrop-filter: blur(20px) saturate(125%);
+}
+
+.divergence-panel::before,
+.ecommerce-poster-panel::before,
+.video-generation-panel::before,
+.model-generation-panel::before {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 10px;
+  content: "";
 }
 
 .video-generation-prompt {
