@@ -8,6 +8,7 @@ import {
   Grid3X3,
   Mic,
   MessageSquareText,
+  Network,
   Palette,
   Plus,
   PlugZap,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import { ControlPanel } from "@/components/ControlPanel";
 import { Gallery } from "@/components/Gallery";
+import { ResearchMindMapModal, type MindMapRevisionRequest } from "@/components/ResearchMindMapModal";
 import { Toast } from "@/components/Toast";
 import { VentEditor } from "@/components/VentEditor";
 import {
@@ -174,7 +176,7 @@ export default function Home() {
       id: makeId("research-message"),
       role: "assistant",
       content:
-        "这里是策划研究工作区。我会以“品物创新 · 产品战略策划师”的角色和你对话，并优先参考核心知识库来完成企业分析、用户洞察、竞争分析与产品定位。"
+        "你好，我是品物 AI 策划师。你可以从项目想法、现有问题或希望达成的目标开始说起。"
     }
   ]);
   const isAuthorized = normalizeAuthCode(authCode) === AUTH_CODE;
@@ -1534,6 +1536,47 @@ export default function Home() {
     }
   }
 
+  async function reviseResearchMessage(
+    messageId: string,
+    originalContent: string,
+    request: MindMapRevisionRequest
+  ) {
+    const {
+      chatApiKey: resolvedChatApiKey,
+      chatApiBaseUrl: resolvedChatApiBaseUrl,
+      unlocked
+    } = getResolvedConfig(false);
+    if (!unlocked || !resolvedChatApiKey || !resolvedChatApiBaseUrl) {
+      throw new Error("当前认证信息不可用，请重新输入认证码。");
+    }
+
+    try {
+      const response = await fetch("/api/research-revise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: resolvedChatApiKey,
+          baseUrl: resolvedChatApiBaseUrl,
+          model: BRAIN_MODEL,
+          originalContent,
+          ...request
+        })
+      });
+      const data = await readApiResponse<{ content?: string; error?: string }>(response);
+      if (!response.ok || !data.content) throw new Error(data.error || "策划案修改失败。");
+      setResearchMessages((current) =>
+        current.map((message) =>
+          message.id === messageId ? { ...message, content: data.content! } : message
+        )
+      );
+      pushToast("success", "已根据导图差异更新策划案。");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "策划案修改失败。";
+      pushToast("error", reason);
+      throw error;
+    }
+  }
+
   async function addResearchFiles(files: FileList | null) {
     if (!files?.length) return;
     const availableSlots = Math.max(0, 4 - researchFiles.length);
@@ -1721,6 +1764,7 @@ export default function Home() {
                 onSend={sendResearchMessage}
                 onToggleVoiceInput={toggleResearchVoiceInput}
                 onRemoveFile={(index) => setResearchFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+                onReviseMessage={reviseResearchMessage}
               />
             ) : null}
 
@@ -1823,7 +1867,8 @@ function ResearchSection({
   isResponding,
   onSend,
   onToggleVoiceInput,
-  onRemoveFile
+  onRemoveFile,
+  onReviseMessage
 }: {
   input: string;
   setInput: (value: string) => void;
@@ -1835,10 +1880,29 @@ function ResearchSection({
   onSend: () => void;
   onToggleVoiceInput: () => void;
   onRemoveFile: (index: number) => void;
+  onReviseMessage: (
+    messageId: string,
+    originalContent: string,
+    request: MindMapRevisionRequest
+  ) => Promise<void>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const streamRef = useRef<HTMLDivElement | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [mindMapMessage, setMindMapMessage] = useState<ResearchMessage | null>(null);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      const stream = streamRef.current;
+      if (!stream) return;
+      stream.scrollTo({
+        top: stream.scrollHeight,
+        behavior: "smooth"
+      });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isResponding, messages.length]);
 
   async function copyMessage(message: ResearchMessage) {
     try {
@@ -1871,7 +1935,7 @@ function ResearchSection({
   return (
     <section className="section-surface">
       <div className="research-shell">
-        <div className="research-stream">
+        <div ref={streamRef} className="research-stream">
           {messages.map((message) => (
             <article key={message.id} className={`research-message ${message.role}`}>
               <div className="research-role">
@@ -1886,15 +1950,28 @@ function ResearchSection({
                   {message.content}
                 </div>
                 {message.role === "assistant" ? (
-                  <button
-                    type="button"
-                    className={`research-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
-                    onClick={() => void copyMessage(message)}
-                    title={copiedMessageId === message.id ? "已复制" : "复制全部文本"}
-                    aria-label={copiedMessageId === message.id ? "已复制" : "复制全部文本"}
-                  >
-                    {copiedMessageId === message.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
+                  <div className="research-message-tools">
+                    {canCreateResearchMindMap(message.content) ? (
+                      <button
+                        type="button"
+                        className="research-message-tool"
+                        onClick={() => setMindMapMessage(message)}
+                        title="转为思维导图"
+                        aria-label="转为思维导图"
+                      >
+                        <Network className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`research-message-tool ${copiedMessageId === message.id ? "copied" : ""}`}
+                      onClick={() => void copyMessage(message)}
+                      title={copiedMessageId === message.id ? "已复制" : "复制全部文本"}
+                      aria-label={copiedMessageId === message.id ? "已复制" : "复制全部文本"}
+                    >
+                      {copiedMessageId === message.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 ) : null}
               </div>
               {message.sources?.length ? (
@@ -2014,8 +2091,25 @@ function ResearchSection({
           />
         </div>
       </div>
+      {mindMapMessage ? (
+        <ResearchMindMapModal
+          content={mindMapMessage.content}
+          onClose={() => setMindMapMessage(null)}
+          onRequestRevision={async (request) => {
+            await onReviseMessage(mindMapMessage.id, mindMapMessage.content, request);
+            setMindMapMessage(null);
+          }}
+        />
+      ) : null}
     </section>
   );
+}
+
+function canCreateResearchMindMap(content: string) {
+  const structuralLines = content
+    .split(/\r?\n/)
+    .filter((line) => /^\s*(#{1,5}\s+|[-*•]\s+|\d+[.)、]\s+)/.test(line));
+  return content.length >= 280 && structuralLines.length >= 4;
 }
 
 function ApiSection(props: {
