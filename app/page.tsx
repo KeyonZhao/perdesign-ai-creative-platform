@@ -30,7 +30,7 @@ import {
   type LocalGalleryStats
 } from "@/lib/local-gallery";
 import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
-import { convertImageDataUrlToPng, prepareImageForVision } from "@/lib/image";
+import { convertImageDataUrlToPng, prepareImageForVision, prepareLocalEditImages } from "@/lib/image";
 import { buildCreativeDivergencePrompt } from "@/lib/creative-divergence";
 import { buildEcommercePosterPrompt } from "@/lib/ecommerce-poster";
 import {
@@ -1369,12 +1369,16 @@ export default function Home() {
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于局部修改。");
     if (!maskImageBase64 || !instruction.trim()) return pushToast("error", "请先涂抹需要修改的区域，并输入修改要求。");
 
-    const pngSourceImage = await convertImageDataUrlToPng(result.imageBase64);
-    const sourceSize = await getImageSizeOption(pngSourceImage, size);
-    await runGeneration({
-      productImage: { name: `${result.title}.png`, dataUrl: pngSourceImage },
+    const sourceSize = await getImageSizeOption(result.imageBase64, size);
+    const preparedLocalEditImages = await prepareLocalEditImages(
+      result.imageBase64,
       maskImageBase64,
-      localEditGuideImageBase64: guideImageBase64,
+      guideImageBase64
+    );
+    await runGeneration({
+      productImage: { name: `${result.title}.jpg`, dataUrl: preparedLocalEditImages.sourceImageBase64 },
+      maskImageBase64: preparedLocalEditImages.maskImageBase64,
+      localEditGuideImageBase64: preparedLocalEditImages.guideImageBase64,
       referenceImage: undefined,
       innovationLevel: 70,
       requirement: instruction.trim(),

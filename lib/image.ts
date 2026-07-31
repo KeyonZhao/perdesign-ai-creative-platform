@@ -85,6 +85,77 @@ export async function convertImageDataUrlToPng(dataUrl: string) {
   return canvas.toDataURL("image/png");
 }
 
+export async function prepareLocalEditImages(
+  sourceDataUrl: string,
+  maskDataUrl: string,
+  guideDataUrl?: string,
+  maximumCombinedLength = 3_100_000
+) {
+  const [sourceImage, maskImage, guideImage] = await Promise.all([
+    loadDataUrlImage(sourceDataUrl, "局部修改源图无法读取，请重新打开图片后再试。"),
+    loadDataUrlImage(maskDataUrl, "局部修改蒙版无法读取，请重新涂抹后再试。"),
+    guideDataUrl
+      ? loadDataUrlImage(guideDataUrl, "局部修改引导图无法读取，请重新涂抹后再试。")
+      : Promise.resolve(undefined)
+  ]);
+
+  const sourceWidth = sourceImage.naturalWidth;
+  const sourceHeight = sourceImage.naturalHeight;
+  let maxDimension = Math.min(1536, Math.max(sourceWidth, sourceHeight));
+  let jpegQuality = 0.84;
+  let preparedSource = sourceDataUrl;
+  let preparedMask = maskDataUrl;
+  let preparedGuide = guideDataUrl;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    preparedSource = renderImageDataUrl(sourceImage, width, height, "image/jpeg", jpegQuality);
+    preparedMask = renderImageDataUrl(maskImage, width, height, "image/png");
+    preparedGuide = guideImage
+      ? renderImageDataUrl(guideImage, width, height, "image/jpeg", jpegQuality)
+      : undefined;
+
+    const combinedLength =
+      preparedSource.length +
+      preparedMask.length +
+      (preparedGuide?.length || 0);
+    if (combinedLength <= maximumCombinedLength) {
+      return {
+        sourceImageBase64: preparedSource,
+        maskImageBase64: preparedMask,
+        guideImageBase64: preparedGuide
+      };
+    }
+
+    maxDimension = Math.max(640, Math.round(maxDimension * 0.82));
+    jpegQuality = Math.max(0.58, jpegQuality - 0.05);
+  }
+
+  throw new Error("图片数据过大，浏览器自动压缩后仍无法提交，请更换尺寸更小的图片。");
+}
+
+function renderImageDataUrl(
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+  mimeType: "image/jpeg" | "image/png",
+  quality?: number
+) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("当前浏览器无法准备局部修改图片。");
+  if (mimeType === "image/jpeg") {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+  }
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL(mimeType, quality);
+}
+
 export async function compositeMaskedEdit(
   sourceDataUrl: string,
   editedDataUrl: string,
