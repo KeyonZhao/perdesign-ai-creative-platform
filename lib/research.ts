@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import path from "path";
 import { promisify } from "util";
-import { callChatCompletion } from "./aihubmix";
+import { callChatCompletion, streamChatCompletion } from "./aihubmix";
 
 const execFileAsync = promisify(execFile);
 
@@ -81,14 +81,17 @@ export async function generateResearchReply(params: {
   baseUrl: string;
   model: string;
   conversation: ResearchConversationMessage[];
+  onDelta?: (delta: string) => void;
 }) {
   const latestUserMessage = [...params.conversation].reverse().find((message) => message.role === "user")?.content || "";
 
   const hasUploadedImages = params.conversation.some((message) => message.images?.length);
 
   if (!hasUploadedImages && shouldHandleSmallTalk(params.conversation, latestUserMessage)) {
+    const answer = buildSmallTalkReply(latestUserMessage);
+    params.onDelta?.(answer);
     return {
-      answer: buildSmallTalkReply(latestUserMessage),
+      answer,
       sources: []
     } satisfies ResearchReply;
   }
@@ -98,14 +101,14 @@ export async function generateResearchReply(params: {
   const executionStandardLoaded = knowledgeDocuments.some(
     (document) => document.id === "product-opportunity-execution-standard"
   );
-  const answer = await callChatCompletion({
+  const completionParams = {
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
     model: params.model,
     temperature: 0.55,
     messages: [
       {
-        role: "system",
+        role: "system" as const,
         content: buildResearchSystemPrompt(retrieved.map((item) => ({ title: item.title, excerpt: item.chunk })))
       },
       ...params.conversation.map((message) => ({
@@ -121,7 +124,10 @@ export async function generateResearchReply(params: {
           : message.content
       }))
     ]
-  });
+  };
+  const answer = params.onDelta
+    ? await streamChatCompletion(completionParams, params.onDelta)
+    : await callChatCompletion(completionParams);
 
   return {
     answer,

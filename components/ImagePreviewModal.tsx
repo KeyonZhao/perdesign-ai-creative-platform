@@ -225,6 +225,20 @@ export function ImagePreviewModal({
     setIsEcommercePanelOpen(true);
   }
 
+  function closeFloatingPanels() {
+    [divergenceCloseTimerRef, ecommercePanelCloseTimerRef, videoPanelCloseTimerRef, modelPanelCloseTimerRef]
+      .forEach((timerRef) => {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      });
+    setIsEcommercePanelOpen(false);
+    setIsDivergenceOpen(false);
+    setIsVideoPanelOpen(false);
+    setIsModelPanelOpen(false);
+  }
+
   function scheduleEcommercePanelClose() {
     if (ecommercePanelCloseTimerRef.current !== null) {
       window.clearTimeout(ecommercePanelCloseTimerRef.current);
@@ -881,8 +895,26 @@ export function ImagePreviewModal({
   }
 
   return (
-    <div className="image-preview-backdrop" onClick={onClose}>
-      <div className={`image-preview-dialog has-image-prompt ${isEditing ? "editing" : ""}`} onClick={(event) => event.stopPropagation()}>
+    <div
+      className="image-preview-backdrop"
+      onClick={() => {
+        if (isEcommercePanelOpen || isDivergenceOpen || isVideoPanelOpen || isModelPanelOpen) {
+          closeFloatingPanels();
+        } else {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className={`image-preview-dialog has-image-prompt ${isEditing ? "editing" : ""}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          const target = event.target as HTMLElement;
+          if (!target.closest("[data-preview-floating-panel], [data-preview-panel-trigger]")) {
+            closeFloatingPanels();
+          }
+        }}
+      >
         <div className="image-preview-toolbar">
           <div className="image-preview-toolbar-actions">
             <button
@@ -918,6 +950,7 @@ export function ImagePreviewModal({
               <span>{isGeneratingVariant ? "生成中" : "生成场景图"}</span>
             </button>
             <button
+              data-preview-panel-trigger="ecommerce"
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isEcommercePanelOpen ? "active" : ""}`}
               onClick={keepEcommercePanelOpen}
               onMouseEnter={keepEcommercePanelOpen}
@@ -930,6 +963,7 @@ export function ImagePreviewModal({
               <span>{isGeneratingVariant ? "生成中" : "生成电商长图"}</span>
             </button>
             <button
+              data-preview-panel-trigger="divergence"
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isDivergenceOpen ? "active" : ""}`}
               onClick={keepDivergenceOpen}
               onMouseEnter={keepDivergenceOpen}
@@ -942,6 +976,7 @@ export function ImagePreviewModal({
               <span>{isGeneratingVariant ? "生成中" : "创意发散"}</span>
             </button>
             <button
+              data-preview-panel-trigger="video"
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isVideoPanelOpen ? "active" : ""}`}
               onClick={keepVideoPanelOpen}
               onMouseEnter={keepVideoPanelOpen}
@@ -954,6 +989,7 @@ export function ImagePreviewModal({
               <span>{isGeneratingVariant ? "生成中" : "生成视频"}</span>
             </button>
             <button
+              data-preview-panel-trigger="model"
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isModelPanelOpen || modelGenerationPhase === "success" ? "active" : ""}`}
               onClick={keepModelPanelOpen}
               onMouseEnter={keepModelPanelOpen}
@@ -1011,6 +1047,7 @@ export function ImagePreviewModal({
 
         {isEcommercePanelOpen && !isEditing ? (
           <section
+            data-preview-floating-panel="ecommerce"
             className="ecommerce-poster-panel"
             aria-label="电商长图设置"
             onMouseEnter={keepEcommercePanelOpen}
@@ -1059,6 +1096,7 @@ export function ImagePreviewModal({
 
         {isModelPanelOpen && !isEditing ? (
           <section
+            data-preview-floating-panel="model"
             className="model-generation-panel"
             aria-label="3D模型设置"
             onMouseEnter={keepModelPanelOpen}
@@ -1188,19 +1226,22 @@ export function ImagePreviewModal({
         ) : null}
 
         {isVideoPanelOpen && !isEditing ? (
-          <VideoGenerationPanel
-            disabled={isGeneratingVariant}
-            value={videoRequestDraft}
-            onChange={setVideoRequestDraft}
-            onClose={() => setIsVideoPanelOpen(false)}
-            onMouseEnter={keepVideoPanelOpen}
-            onMouseLeave={scheduleVideoPanelClose}
-            onSubmit={(request) => onGenerateVideo?.(result, request)}
-          />
+          <div data-preview-floating-panel="video">
+            <VideoGenerationPanel
+              disabled={isGeneratingVariant}
+              value={videoRequestDraft}
+              onChange={setVideoRequestDraft}
+              onClose={() => setIsVideoPanelOpen(false)}
+              onMouseEnter={keepVideoPanelOpen}
+              onMouseLeave={scheduleVideoPanelClose}
+              onSubmit={(request) => onGenerateVideo?.(result, request)}
+            />
+          </div>
         ) : null}
 
         {isDivergenceOpen && !isEditing ? (
           <section
+            data-preview-floating-panel="divergence"
             className="divergence-panel"
             aria-label="创意发散设置"
             onMouseEnter={keepDivergenceOpen}

@@ -25,11 +25,34 @@ export async function POST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig(payload, "chat");
-    const result = await generateResearchReply({
-      ...payload,
-      ...provider
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (value: unknown) => controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`));
+        try {
+          const result = await generateResearchReply({
+            ...payload,
+            ...provider,
+            onDelta: (content) => send({ type: "delta", content })
+          });
+          send({ type: "done", sources: result.sources });
+        } catch (error) {
+          console.error("[research-chat] stream failed", error);
+          send({
+            type: "error",
+            error: error instanceof Error ? error.message : "策划研究回复失败，请稍后重试。"
+          });
+        } finally {
+          controller.close();
+        }
+      }
     });
-    return NextResponse.json(result);
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform"
+      }
+    });
   } catch (error) {
     console.error("[research-chat] request failed", error);
     const message = error instanceof Error ? error.message : "策划研究回复失败，请稍后重试。";

@@ -71,6 +71,68 @@ export async function callChatCompletion(params: {
   return content;
 }
 
+export async function streamChatCompletion(
+  params: {
+    baseUrl?: string;
+    apiKey: string;
+    model: string;
+    messages: ChatMessage[];
+    temperature?: number;
+  },
+  onDelta: (delta: string) => void
+) {
+  const response = await fetch(`${resolveBaseUrl(params.baseUrl)}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.7,
+      stream: true
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(getFriendlyAiError(response.status, await response.text()));
+  }
+  if (!response.body) throw new Error("接口没有返回可读取的文本流。");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = done ? "" : lines.pop() || "";
+    for (const line of lines) {
+      const data = line.trim().replace(/^data:\s*/, "");
+      if (!data || data === "[DONE]") continue;
+      try {
+        const json = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+        };
+        const delta = json.choices?.[0]?.delta?.content || json.choices?.[0]?.message?.content || "";
+        if (delta) {
+          content += delta;
+          onDelta(delta);
+        }
+      } catch {
+        // Ignore keep-alive and provider-specific stream lines.
+      }
+    }
+    if (done) break;
+  }
+
+  if (!content) throw new Error("接口没有返回有效文本内容。");
+  return content;
+}
+
 const PROMPT_OPTIMIZER_SYSTEM_PROMPT = `你是一名具备多模态理解能力的工业设计提示词架构师。你的任务不是机械扩写，也不是堆砌“高清、4K、科技感、高级感”等词，而是结合用户当前文字与上传图片，生成一段可直接提交给图像生成模型的中文产品设计提示词。
 
 始终遵守以下原则：

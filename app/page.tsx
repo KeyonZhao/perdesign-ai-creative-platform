@@ -5,15 +5,19 @@ import {
   Bot,
   Check,
   Copy,
+  Download,
   Grid3X3,
   Mic,
   MessageSquareText,
   Network,
   Palette,
+  Pencil,
   Plus,
   PlugZap,
   SendHorizontal,
   Sparkles,
+  Trash2,
+  Upload,
   X
 } from "lucide-react";
 import { ControlPanel } from "@/components/ControlPanel";
@@ -79,6 +83,9 @@ const SCENE_GENERATION_PROMPT = "分析图片中的产品品类，生成该品�
 const PRESET_CHAT_API_KEY = "server-managed";
 const PRESET_IMAGE_API_KEY = "server-managed";
 const MAX_IMAGE_GENERATION_CONCURRENCY = 20;
+const RESEARCH_HISTORY_STORAGE_KEY = "perdesign-research-history-v1";
+const RESEARCH_WELCOME_MESSAGE =
+  "你好，我是品物 AI 策划师。你可以从项目想法、现有问题或希望达成的目标开始说起。";
 
 type WorkspaceSection = "research" | "design" | "vent" | "api";
 type ResearchFile = {
@@ -105,6 +112,13 @@ type ResearchMessage = {
   content: string;
   files?: ResearchFile[];
   sources?: string[];
+};
+type ResearchSession = {
+  id: string;
+  title: string;
+  customTitle?: boolean;
+  updatedAt: number;
+  messages: ResearchMessage[];
 };
 
 type BrowserSpeechRecognition = {
@@ -171,14 +185,10 @@ export default function Home() {
   const [isResearchListening, setIsResearchListening] = useState(false);
   const [isResearchResponding, setIsResearchResponding] = useState(false);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
-  const [researchMessages, setResearchMessages] = useState<ResearchMessage[]>([
-    {
-      id: makeId("research-message"),
-      role: "assistant",
-      content:
-        "你好，我是品物 AI 策划师。你可以从项目想法、现有问题或希望达成的目标开始说起。"
-    }
-  ]);
+  const [researchMessages, setResearchMessages] = useState<ResearchMessage[]>(() => createResearchWelcomeMessages());
+  const [researchSessions, setResearchSessions] = useState<ResearchSession[]>([]);
+  const [activeResearchSessionId, setActiveResearchSessionId] = useState("");
+  const [isResearchHistoryReady, setIsResearchHistoryReady] = useState(false);
   const isAuthorized = normalizeAuthCode(authCode) === AUTH_CODE;
   const hasChatConfig = isAuthorized;
   const canGenerate = Boolean(
@@ -221,6 +231,72 @@ export default function Home() {
       speechRecognitionRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(RESEARCH_HISTORY_STORAGE_KEY) || "[]") as ResearchSession[];
+      const valid = parsed
+        .filter((session) =>
+          session?.id &&
+          Array.isArray(session.messages) &&
+          session.messages.some((message) => message.role === "user" && message.content.trim())
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 40);
+      localStorage.setItem(RESEARCH_HISTORY_STORAGE_KEY, JSON.stringify(valid));
+      if (valid.length) {
+        setResearchSessions(valid);
+        setActiveResearchSessionId(valid[0].id);
+        setResearchMessages(valid[0].messages);
+      } else {
+        const session = createResearchSessionRecord();
+        setResearchSessions([session]);
+        setActiveResearchSessionId(session.id);
+        setResearchMessages(session.messages);
+      }
+    } catch {
+      const session = createResearchSessionRecord();
+      setResearchSessions([session]);
+      setActiveResearchSessionId(session.id);
+      setResearchMessages(session.messages);
+    } finally {
+      setIsResearchHistoryReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isResearchHistoryReady || !activeResearchSessionId) return;
+    setResearchSessions((current) => {
+      const storedMessages = sanitizeResearchMessages(researchMessages);
+      const existingSession = current.find((session) => session.id === activeResearchSessionId);
+      if (
+        existingSession &&
+        JSON.stringify(existingSession.messages) === JSON.stringify(storedMessages)
+      ) {
+        return current;
+      }
+      const nextSession: ResearchSession = {
+        id: activeResearchSessionId,
+        title: existingSession?.customTitle
+          ? existingSession.title
+          : getResearchSessionTitle(storedMessages),
+        customTitle: existingSession?.customTitle,
+        updatedAt: Date.now(),
+        messages: storedMessages
+      };
+      const existingIndex = current.findIndex((session) => session.id === activeResearchSessionId);
+      const next = existingIndex >= 0
+        ? current.map((session) => session.id === activeResearchSessionId ? nextSession : session)
+        : [nextSession, ...current].slice(0, 40);
+      const sortedNext = sortResearchSessionsByUpdatedAt(next);
+      try {
+        localStorage.setItem(RESEARCH_HISTORY_STORAGE_KEY, JSON.stringify(sortedNext));
+      } catch {
+        // Keep the in-memory history available if browser storage is full or unavailable.
+      }
+      return sortedNext;
+    });
+  }, [activeResearchSessionId, isResearchHistoryReady, researchMessages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1488,11 +1564,22 @@ export default function Home() {
         images: conversationImages
       }
     ];
+    const shouldGenerateResearchTitle = !researchMessages.some((message) => message.role === "user");
+    const titleSessionId = activeResearchSessionId;
 
     setResearchMessages((current) => [...current, { id: makeId("research-user"), role: "user", content: userContent, files }]);
     setResearchInput("");
     setResearchFiles([]);
     setIsResearchResponding(true);
+
+    if (shouldGenerateResearchTitle && titleSessionId) {
+      void generateSemanticResearchTitle({
+        sessionId: titleSessionId,
+        content: userContent,
+        apiKey: resolvedChatApiKey,
+        baseUrl: resolvedChatApiBaseUrl
+      });
+    }
 
     try {
       const response = await fetch("/api/research-chat", {
@@ -1506,20 +1593,39 @@ export default function Home() {
         })
       });
 
-      const data = await readApiResponse<{ answer?: string; sources?: string[]; error?: string }>(response);
-      if (!response.ok || !data.answer) throw new Error(data.error || "策划研究回复失败。");
-      const answer = data.answer;
-      const sources = data.sources || [];
+      if (!response.ok || !response.body) {
+        const data = await readApiResponse<{ error?: string }>(response);
+        throw new Error(data.error || "策划研究回复失败。");
+      }
 
+      const assistantMessageId = makeId("research-assistant");
+      let streamedContent = "";
+      let streamError = "";
       setResearchMessages((current) => [
         ...current,
-        {
-          id: makeId("research-assistant"),
-          role: "assistant",
-          content: answer,
-          sources
-        }
+        { id: assistantMessageId, role: "assistant", content: "" }
       ]);
+
+      await readNdjsonStream(response.body, (event) => {
+        if (event.type === "delta" && event.content) {
+          streamedContent += event.content;
+          setResearchMessages((current) => current.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: streamedContent }
+              : message
+          ));
+        } else if (event.type === "done") {
+          setResearchMessages((current) => current.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, sources: event.sources || [] }
+              : message
+          ));
+        } else if (event.type === "error") {
+          streamError = event.error || "策划研究回复失败。";
+        }
+      });
+      if (streamError) throw new Error(streamError);
+      if (!streamedContent) throw new Error("策划研究接口没有返回有效内容。");
     } catch (error) {
       const reason = error instanceof Error ? error.message : "策划研究回复失败。";
       pushToast("error", reason);
@@ -1533,6 +1639,40 @@ export default function Home() {
       ]);
     } finally {
       setIsResearchResponding(false);
+    }
+  }
+
+  async function generateSemanticResearchTitle({
+    sessionId,
+    content,
+    apiKey,
+    baseUrl
+  }: {
+    sessionId: string;
+    content: string;
+    apiKey: string;
+    baseUrl: string;
+  }) {
+    try {
+      const response = await fetch("/api/research-title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, baseUrl, model: BRAIN_MODEL, content })
+      });
+      const data = await readApiResponse<{ title?: string; error?: string }>(response);
+      if (!response.ok || !data.title) return;
+      setResearchSessions((current) => {
+        const next = current.map((session) =>
+          session.id === sessionId && !session.customTitle
+            ? { ...session, title: data.title!, customTitle: true, updatedAt: Date.now() }
+            : session
+        );
+        const sorted = sortResearchSessionsByUpdatedAt(next);
+        persistResearchSessions(sorted);
+        return sorted;
+      });
+    } catch {
+      // Keep the local fallback title when semantic title generation is unavailable.
     }
   }
 
@@ -1574,6 +1714,113 @@ export default function Home() {
       const reason = error instanceof Error ? error.message : "策划案修改失败。";
       pushToast("error", reason);
       throw error;
+    }
+  }
+
+  function startNewResearchSession() {
+    if (isResearchResponding) {
+      pushToast("info", "请等待当前策划回复完成后再新建会话。");
+      return;
+    }
+    const session = createResearchSessionRecord();
+    setResearchSessions((current) => [session, ...current]);
+    setActiveResearchSessionId(session.id);
+    setResearchMessages(session.messages);
+    setResearchInput("");
+    setResearchFiles([]);
+  }
+
+  function openResearchSession(sessionId: string) {
+    if (sessionId === activeResearchSessionId || isResearchResponding) return;
+    const session = researchSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    setActiveResearchSessionId(session.id);
+    setResearchMessages(session.messages);
+    setResearchInput("");
+    setResearchFiles([]);
+  }
+
+  function renameResearchSession(sessionId: string, title: string) {
+    const nextTitle = title.trim().slice(0, 80);
+    if (!nextTitle) return;
+    setResearchSessions((current) => {
+      const next = sortResearchSessionsByUpdatedAt(current.map((session) =>
+        session.id === sessionId
+          ? { ...session, title: nextTitle, customTitle: true, updatedAt: Date.now() }
+          : session
+      ));
+      persistResearchSessions(next);
+      return next;
+    });
+  }
+
+  function deleteResearchSession(sessionId: string) {
+    if (isResearchResponding) return;
+    const remaining = researchSessions.filter((session) => session.id !== sessionId);
+    if (sessionId !== activeResearchSessionId) {
+      setResearchSessions(remaining);
+      persistResearchSessions(remaining);
+      return;
+    }
+    const replacement = remaining[0] || createResearchSessionRecord();
+    const next = remaining.length ? remaining : [replacement];
+    setResearchSessions(next);
+    setActiveResearchSessionId(replacement.id);
+    setResearchMessages(replacement.messages);
+    setResearchInput("");
+    setResearchFiles([]);
+    persistResearchSessions(next);
+  }
+
+  function exportResearchSession(sessionId: string) {
+    const session = researchSessions.find((item) => item.id === sessionId);
+    if (!session) {
+      pushToast("error", "当前没有可导出的策划项目。");
+      return;
+    }
+    const payload = {
+      format: "perdesign-research-project",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      project: {
+        title: session.title,
+        updatedAt: session.updatedAt,
+        messages: sanitizeResearchMessages(session.messages)
+      }
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${sanitizeResearchFilename(session.title)}.perdesign-research.json`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    pushToast("success", "策划项目已导出。");
+  }
+
+  async function importResearchSession(file: File) {
+    if (isResearchResponding) {
+      pushToast("info", "请等待当前策划回复完成后再导入项目。");
+      return;
+    }
+    try {
+      if (file.size > 8 * 1024 * 1024) throw new Error("策划项目文件超过 8MB，无法导入。");
+      const imported = parseResearchProjectFile(await file.text());
+      const session: ResearchSession = {
+        id: makeId("research-session"),
+        title: imported.title,
+        customTitle: true,
+        updatedAt: Date.now(),
+        messages: imported.messages.map((message) => ({ ...message, id: makeId(`research-${message.role}`) }))
+      };
+      setResearchSessions((current) => [session, ...current].slice(0, 40));
+      setActiveResearchSessionId(session.id);
+      setResearchMessages(session.messages);
+      setResearchInput("");
+      setResearchFiles([]);
+      pushToast("success", `已导入策划项目“${session.title}”。`);
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "策划项目文件无法识别。");
     }
   }
 
@@ -1765,6 +2012,15 @@ export default function Home() {
                 onToggleVoiceInput={toggleResearchVoiceInput}
                 onRemoveFile={(index) => setResearchFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))}
                 onReviseMessage={reviseResearchMessage}
+                sessions={researchSessions}
+                activeSessionId={activeResearchSessionId}
+                historyReady={isResearchHistoryReady}
+                onNewSession={startNewResearchSession}
+                onSelectSession={openResearchSession}
+                onExportSession={exportResearchSession}
+                onImportSession={importResearchSession}
+                onRenameSession={renameResearchSession}
+                onDeleteSession={deleteResearchSession}
               />
             ) : null}
 
@@ -1780,7 +2036,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        <span className="app-version" aria-label="当前版本 v1.0.3">v1.0.3</span>
+        <span className="app-version" aria-label="当前版本 v1.0.4">v1.0.4</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}
@@ -1868,7 +2124,16 @@ function ResearchSection({
   onSend,
   onToggleVoiceInput,
   onRemoveFile,
-  onReviseMessage
+  onReviseMessage,
+  sessions,
+  activeSessionId,
+  historyReady,
+  onNewSession,
+  onSelectSession,
+  onExportSession,
+  onImportSession,
+  onRenameSession,
+  onDeleteSession
 }: {
   input: string;
   setInput: (value: string) => void;
@@ -1885,24 +2150,57 @@ function ResearchSection({
     originalContent: string,
     request: MindMapRevisionRequest
   ) => Promise<void>;
+  sessions: ResearchSession[];
+  activeSessionId: string;
+  historyReady: boolean;
+  onNewSession: () => void;
+  onSelectSession: (sessionId: string) => void;
+  onExportSession: (sessionId: string) => void;
+  onImportSession: (file: File) => Promise<void>;
+  onRenameSession: (sessionId: string, title: string) => void;
+  onDeleteSession: (sessionId: string) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const historyImportInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
+  const lastAutoPositionedMessageIdRef = useRef(messages.at(-1)?.id || "");
   const [isDragOver, setIsDragOver] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [mindMapMessage, setMindMapMessage] = useState<ResearchMessage | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renamingTitle, setRenamingTitle] = useState("");
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const latestMessageId = messages.at(-1)?.id || "";
+  const latestMessageRole = messages.at(-1)?.role;
 
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
       const stream = streamRef.current;
       if (!stream) return;
+      const isNewMessage = Boolean(
+        latestMessageId && latestMessageId !== lastAutoPositionedMessageIdRef.current
+      );
+      if (isNewMessage && latestMessageRole === "assistant") {
+        const target = stream.querySelector<HTMLElement>(
+          `[data-research-message-id="${CSS.escape(latestMessageId)}"]`
+        );
+        if (target) {
+          stream.scrollTo({
+            top: Math.max(0, target.offsetTop - stream.offsetTop - 8),
+            behavior: "smooth"
+          });
+          lastAutoPositionedMessageIdRef.current = latestMessageId;
+          return;
+        }
+      }
       stream.scrollTo({
         top: stream.scrollHeight,
         behavior: "smooth"
       });
+      if (latestMessageId) lastAutoPositionedMessageIdRef.current = latestMessageId;
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [isResponding, messages.length]);
+  }, [isResponding, latestMessageId, latestMessageRole, messages.length]);
 
   async function copyMessage(message: ResearchMessage) {
     try {
@@ -1934,10 +2232,132 @@ function ResearchSection({
 
   return (
     <section className="section-surface">
-      <div className="research-shell">
+      <div className="research-workspace">
+        <aside className="research-history-sidebar">
+          <div className="research-history-heading">
+            <div>
+              <strong>策划历史</strong>
+              <span>{sessions.length} 个项目</span>
+            </div>
+            <div className="research-history-actions">
+              <button type="button" onClick={onNewSession} disabled={isResponding} title="新建策划" aria-label="新建策划">
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <input
+            ref={historyImportInputRef}
+            className="hidden"
+            type="file"
+            accept=".json,.perdesign-research.json,application/json"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void onImportSession(file);
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="research-history-import"
+            onClick={() => historyImportInputRef.current?.click()}
+            disabled={isResponding}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            <span>导入策划项目</span>
+          </button>
+          <div className="research-history-list">
+            {historyReady ? sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`research-history-item ${session.id === activeSessionId ? "active" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="research-history-item-main"
+                  onClick={() => onSelectSession(session.id)}
+                  disabled={isResponding && session.id !== activeSessionId}
+                >
+                  <MessageSquareText className="h-3.5 w-3.5" />
+                  <span>
+                    {renamingSessionId === session.id ? (
+                      <input
+                        value={renamingTitle}
+                        autoFocus
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => setRenamingTitle(event.target.value)}
+                        onBlur={() => {
+                          onRenameSession(session.id, renamingTitle);
+                          setRenamingSessionId(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.currentTarget.blur();
+                          if (event.key === "Escape") {
+                            setRenamingTitle(session.title);
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    ) : <strong>{session.title}</strong>}
+                    <small>{formatResearchSessionTime(session.updatedAt)}</small>
+                  </span>
+                </button>
+                <div className="research-history-item-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenamingSessionId(session.id);
+                      setRenamingTitle(session.title);
+                    }}
+                    disabled={isResponding}
+                    title="重命名"
+                    aria-label={`重命名 ${session.title}`}
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`确定删除策划项目“${session.title}”吗？`)) {
+                        onDeleteSession(session.id);
+                      }
+                    }}
+                    disabled={isResponding}
+                    title="删除"
+                    aria-label={`删除 ${session.title}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            )) : (
+              <div className="research-history-loading">正在读取历史记录…</div>
+            )}
+          </div>
+        </aside>
+
+        <div className="research-shell">
+        <div className="research-conversation-toolbar">
+          <div>
+            <strong>{activeSession?.title || "新策划研究"}</strong>
+            <span>策划对话与研究结果</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onExportSession(activeSessionId)}
+            disabled={!activeSessionId || isResponding}
+            title="导出当前策划项目"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span>导出</span>
+          </button>
+        </div>
         <div ref={streamRef} className="research-stream">
           {messages.map((message) => (
-            <article key={message.id} className={`research-message ${message.role}`}>
+            <article
+              key={message.id}
+              data-research-message-id={message.id}
+              className={`research-message ${message.role}`}
+            >
               <div className="research-role">
                 {message.role === "assistant" ? <Bot className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
                 <span>{message.role === "assistant" ? "Research AI" : "你"}</span>
@@ -2090,6 +2510,7 @@ function ResearchSection({
             }}
           />
         </div>
+        </div>
       </div>
       {mindMapMessage ? (
         <ResearchMindMapModal
@@ -2110,6 +2531,122 @@ function canCreateResearchMindMap(content: string) {
     .split(/\r?\n/)
     .filter((line) => /^\s*(#{1,5}\s+|[-*•]\s+|\d+[.)、]\s+)/.test(line));
   return content.length >= 280 && structuralLines.length >= 4;
+}
+
+function createResearchWelcomeMessages(): ResearchMessage[] {
+  return [
+    {
+      id: makeId("research-message"),
+      role: "assistant",
+      content: RESEARCH_WELCOME_MESSAGE
+    }
+  ];
+}
+
+function createResearchSessionRecord(): ResearchSession {
+  return {
+    id: makeId("research-session"),
+    title: "新策划研究",
+    updatedAt: Date.now(),
+    messages: createResearchWelcomeMessages()
+  };
+}
+
+function sanitizeResearchMessages(messages: ResearchMessage[]): ResearchMessage[] {
+  return messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    sources: message.sources
+  }));
+}
+
+function persistResearchSessions(sessions: ResearchSession[]) {
+  try {
+    localStorage.setItem(
+      RESEARCH_HISTORY_STORAGE_KEY,
+      JSON.stringify(sortResearchSessionsByUpdatedAt(sessions).slice(0, 40))
+    );
+  } catch {
+    // The current in-memory history remains usable if browser storage is unavailable.
+  }
+}
+
+function sortResearchSessionsByUpdatedAt(sessions: ResearchSession[]) {
+  return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 40);
+}
+
+function getResearchSessionTitle(messages: ResearchMessage[]) {
+  const firstUserMessage = messages.find((message) => message.role === "user")?.content.trim();
+  if (!firstUserMessage) return "新策划研究";
+  const firstSentence = firstUserMessage
+    .replace(/\s+/g, " ")
+    .split(/[。！？!?；;\n]/)[0]
+    .trim();
+  const summarized = firstSentence
+    .replace(/^(?:你好[，,、 ]*)?(?:请|麻烦)?(?:你)?(?:帮我|帮忙|给我)?(?:策划|研究|分析|做|设计|开发|创建|生成)(?:一下|一个|一款|一份)?[，,、：: ]*/i, "")
+    .replace(/^(?:我|我们)(?:现在|这次)?(?:想要?|需要|准备|计划|希望)(?:做|开发|设计|推出|策划)?(?:一个|一款|一套|一份)?[，,、：: ]*/i, "")
+    .trim() || firstSentence;
+  return summarized.length > 20 ? `${summarized.slice(0, 20)}…` : summarized;
+}
+
+function formatResearchSessionTime(timestamp: number) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
+function sanitizeResearchFilename(value: string) {
+  const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").trim();
+  return (cleaned || "策划项目").slice(0, 60);
+}
+
+function parseResearchProjectFile(raw: string): { title: string; messages: ResearchMessage[] } {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("文件不是有效的策划项目 JSON。");
+  }
+  if (!value || typeof value !== "object") throw new Error("策划项目文件结构不正确。");
+  const payload = value as {
+    format?: unknown;
+    version?: unknown;
+    project?: { title?: unknown; messages?: unknown };
+  };
+  if (payload.format !== "perdesign-research-project" || payload.version !== 1) {
+    throw new Error("这不是受支持的品物策划项目文件。");
+  }
+  const title = typeof payload.project?.title === "string" ? payload.project.title.trim() : "";
+  if (!title || title.length > 120 || !Array.isArray(payload.project?.messages)) {
+    throw new Error("策划项目缺少有效的标题或对话内容。");
+  }
+  if (!payload.project.messages.length || payload.project.messages.length > 500) {
+    throw new Error("策划项目中的消息数量不正确。");
+  }
+  const messages = payload.project.messages.map((item, index) => {
+    if (!item || typeof item !== "object") throw new Error(`第 ${index + 1} 条消息格式不正确。`);
+    const message = item as { role?: unknown; content?: unknown; sources?: unknown };
+    if ((message.role !== "assistant" && message.role !== "user") || typeof message.content !== "string") {
+      throw new Error(`第 ${index + 1} 条消息缺少有效内容。`);
+    }
+    if (!message.content.trim() || message.content.length > 500_000) {
+      throw new Error(`第 ${index + 1} 条消息内容不正确或过长。`);
+    }
+    const sources = Array.isArray(message.sources)
+      ? message.sources.filter((source): source is string => typeof source === "string").slice(0, 50)
+      : undefined;
+    return {
+      id: makeId(`research-${message.role}`),
+      role: message.role,
+      content: message.content,
+      sources
+    } satisfies ResearchMessage;
+  });
+  return { title: title.slice(0, 80), messages };
 }
 
 function ApiSection(props: {
@@ -2240,6 +2777,37 @@ async function readApiResponse<T>(response: Response): Promise<T> {
       throw new Error(`服务请求失败（${response.status}），请稍后重试。`);
     }
     throw new Error("服务返回格式异常，请稍后重试。");
+  }
+}
+
+type ResearchStreamEvent = {
+  type: "delta" | "done" | "error";
+  content?: string;
+  sources?: string[];
+  error?: string;
+};
+
+async function readNdjsonStream(
+  stream: ReadableStream<Uint8Array>,
+  onEvent: (event: ResearchStreamEvent) => void
+) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = done ? "" : lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        onEvent(JSON.parse(line) as ResearchStreamEvent);
+      } catch {
+        // Ignore incomplete or provider-specific non-JSON lines.
+      }
+    }
+    if (done) break;
   }
 }
 
