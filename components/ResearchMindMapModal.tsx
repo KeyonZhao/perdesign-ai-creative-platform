@@ -20,6 +20,8 @@ type TreeNode = {
   id: string;
   label: string;
   children: TreeNode[];
+  detached?: boolean;
+  position?: { x: number; y: number };
 };
 
 type LayoutNode = TreeNode & {
@@ -66,18 +68,27 @@ export function ResearchMindMapModal({
   const originalTree = useMemo(() => buildMindMapTree(content), [content]);
   const originalTreeRef = useRef<TreeNode>(cloneTree(originalTree));
   const [tree, setTree] = useState<TreeNode>(() => cloneTree(originalTree));
-  const map = useMemo(() => layoutTree(tree), [tree]);
+  const baseMap = useMemo(() => layoutTree(tree), [tree]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const canvasDragRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const nodeDragRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const nextNodeIdRef = useRef(1);
+  const undoHistoryRef = useRef<TreeNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dropIntent, setDropIntent] = useState<DropIntent | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   const [scale, setScale] = useState(0.88);
   const [pan, setPan] = useState({ x: 56, y: 48 });
   const [isApplying, setIsApplying] = useState(false);
+  const previewTree = useMemo(() => {
+    if (!draggingId || !dropIntent) return tree;
+    const draft = cloneTree(tree);
+    moveNodeInTree(draft, draggingId, dropIntent);
+    return draft;
+  }, [draggingId, dropIntent, tree]);
+  const map = useMemo(() => layoutTree(previewTree), [previewTree]);
   const changes = useMemo(() => compareTrees(originalTreeRef.current, tree), [tree]);
 
   const setZoom = (nextScale: number) => setScale(Math.max(0.38, Math.min(1.8, nextScale)));
@@ -86,12 +97,34 @@ export function ResearchMindMapModal({
     setTree((current) => {
       const draft = cloneTree(current);
       mutator(draft);
+      if (JSON.stringify(draft) === JSON.stringify(current)) return current;
+      undoHistoryRef.current.push(cloneTree(current));
+      if (undoHistoryRef.current.length > 80) undoHistoryRef.current.shift();
       return draft;
     });
   }
 
-  function makeNode() {
-    return { id: `added-${Date.now()}-${nextNodeIdRef.current++}`, label: "新节点", children: [] };
+  function undoTreeChange() {
+    const previous = undoHistoryRef.current.pop();
+    if (!previous) return;
+    setTree(previous);
+    setSelectedId(null);
+    setEditingId(null);
+    setDropIntent(null);
+    setDraggingId(null);
+  }
+
+  function makeNode(label = "新节点") {
+    return { id: `added-${Date.now()}-${nextNodeIdRef.current++}`, label, children: [] };
+  }
+
+  function addBlankCanvasNode(x: number, y: number) {
+    const node = { ...makeNode(""), detached: true, position: { x, y } };
+    mutateTree((draft) => {
+      draft.children.push(node);
+    });
+    setSelectedId(node.id);
+    setEditingId(node.id);
   }
 
   function addChild(parentId: string | null = selectedId) {
@@ -134,30 +167,24 @@ export function ResearchMindMapModal({
     if (nodeId === tree.id || nodeId === targetId) return;
     const movingNode = findNode(tree, nodeId);
     if (!movingNode || findNode(movingNode, targetId)) return;
-    mutateTree((draft) => {
-      const sourceParent = findParent(draft, nodeId);
-      const target = findNode(draft, targetId);
-      if (!sourceParent || !target) return;
-      const index = sourceParent.children.findIndex((child) => child.id === nodeId);
-      const [removed] = sourceParent.children.splice(index, 1);
-      if (!removed) return;
-      if (mode === "child" || target.id === draft.id) {
-        target.children.push(removed);
-        return;
-      }
-      const targetParent = findParent(draft, targetId);
-      if (!targetParent) {
-        sourceParent.children.splice(Math.max(0, index), 0, removed);
-        return;
-      }
-      const targetIndex = targetParent.children.findIndex((child) => child.id === targetId);
-      targetParent.children.splice(targetIndex + (mode === "after" ? 1 : 0), 0, removed);
-    });
+    mutateTree((draft) => moveNodeInTree(draft, nodeId, intent));
+  }
+
+  function detachNode(nodeId: string, position: { x: number; y: number }) {
+    if (nodeId === tree.id) return;
+    mutateTree((draft) => detachNodeInTree(draft, nodeId, position));
   }
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        if (!target?.matches("input, textarea, [contenteditable='true']")) {
+          event.preventDefault();
+          undoTreeChange();
+        }
+        return;
+      }
       if (target?.matches("input, textarea, [contenteditable='true']")) return;
       if (!selectedId) return;
       if (event.key === "Delete" || event.key === "Backspace") {
@@ -198,32 +225,14 @@ export function ResearchMindMapModal({
       const rect = event.currentTarget.getBoundingClientRect();
       const localX = (event.clientX - rect.left - pan.x) / scale;
       const localY = (event.clientY - rect.top - pan.y) / scale;
-      const target = map.nodes.find((node) =>
-        (() => {
-          const size = getNodeSize(node.depth);
-          return (
-        node.id !== nodeDrag.id &&
-        localX >= node.x &&
-        localX <= node.x + size.width &&
-        localY >= node.y &&
-        localY <= node.y + size.height &&
-        !isDescendant(tree, nodeDrag.id, node.id)
-          );
-        })()
-      );
-      if (!target) {
-        setDropIntent(null);
-      } else {
-        const relativeY = (localY - target.y) / getNodeSize(target.depth).height;
-        const mode = target.id === tree.id
-          ? "child"
-          : relativeY < 0.28
-            ? "before"
-            : relativeY > 0.72
-              ? "after"
-              : "child";
-        setDropIntent({ targetId: target.id, mode });
-      }
+      setDropIntent((current) => inferDropIntent({
+        tree,
+        map: baseMap,
+        draggedId: nodeDrag.id,
+        x: localX,
+        y: localY,
+        current
+      }));
       return;
     }
     const drag = canvasDragRef.current;
@@ -233,11 +242,22 @@ export function ResearchMindMapModal({
 
   function finishPointerInteraction() {
     const nodeDrag = nodeDragRef.current;
-    if (nodeDrag && dropIntent) moveNode(nodeDrag.id, dropIntent);
+    if (nodeDrag && dropIntent) {
+      moveNode(nodeDrag.id, dropIntent);
+    } else if (nodeDrag && Math.hypot(dragOffset.x, dragOffset.y) > 36) {
+      const sourceNode = baseMap.nodes.find((node) => node.id === nodeDrag.id);
+      if (sourceNode) {
+        detachNode(nodeDrag.id, {
+          x: Math.max(0, sourceNode.x + dragOffset.x),
+          y: Math.max(0, sourceNode.y + dragOffset.y)
+        });
+      }
+    }
     nodeDragRef.current = null;
     canvasDragRef.current = null;
     setDragOffset({ x: 0, y: 0 });
     setDropIntent(null);
+    setDraggingId(null);
   }
 
   async function applyRevision() {
@@ -292,7 +312,7 @@ export function ResearchMindMapModal({
         <header className="research-mindmap-header">
           <div>
             <strong>策划案思维导图</strong>
-            <span>双击节点编辑文字 · Tab 添加子节点 · Enter 添加同级 · Del 删除</span>
+            <span>双击编辑 · 拖拽调整层级与顺序 · Ctrl/⌘ + Z 撤销 · Tab 添加子节点 · Enter 添加同级 · Del 删除</span>
           </div>
           <div className="research-mindmap-actions">
             <button type="button" onClick={() => setZoom(scale - 0.12)} title="缩小"><Minus className="h-4 w-4" /></button>
@@ -328,6 +348,15 @@ export function ResearchMindMapModal({
             onPointerMove={handlePointerMove}
             onPointerUp={finishPointerInteraction}
             onPointerCancel={finishPointerInteraction}
+            onDoubleClick={(event) => {
+              if (event.target !== event.currentTarget) return;
+              event.preventDefault();
+              const rect = event.currentTarget.getBoundingClientRect();
+              addBlankCanvasNode(
+                Math.max(0, (event.clientX - rect.left - pan.x) / scale - getNodeSize(1).width / 2),
+                Math.max(0, (event.clientY - rect.top - pan.y) / scale - getNodeSize(1).height / 2)
+              );
+            }}
             onWheel={(event: WheelEvent<SVGSVGElement>) => {
               event.preventDefault();
               setZoom(scale * (event.deltaY > 0 ? 0.9 : 1.1));
@@ -335,28 +364,57 @@ export function ResearchMindMapModal({
           >
             <g transform={`translate(${pan.x} ${pan.y}) scale(${scale})`}>
               {map.edges.map((edge) => {
-                const draggedId = nodeDragRef.current?.id;
+                const draggedId = draggingId;
                 const internalDraggedEdge = draggedId && (edge.parentId === draggedId || isDescendant(tree, draggedId, edge.parentId));
                 const detachedRootEdge = draggedId && edge.childId === draggedId && !internalDraggedEdge;
+                const isPreviewConnection = Boolean(detachedRootEdge && dropIntent);
                 return (
                   <path
                     key={edge.id}
                     d={edge.path}
                     fill="none"
-                    stroke="rgba(168,156,255,.28)"
-                    strokeWidth="1.5"
-                    opacity={detachedRootEdge ? 0 : 1}
+                    stroke={isPreviewConnection ? "rgba(168,156,255,.48)" : "rgba(168,156,255,.28)"}
+                    strokeWidth={isPreviewConnection ? 1.8 : 1.5}
+                    strokeDasharray={isPreviewConnection ? "6 6" : undefined}
+                    opacity={detachedRootEdge && !isPreviewConnection ? 0 : 1}
                     transform={internalDraggedEdge ? `translate(${dragOffset.x} ${dragOffset.y})` : undefined}
                   />
                 );
               })}
-              {map.nodes.map((node) => (
+              {draggingId && dropIntent ? (() => {
+                const placeholder = map.nodes.find((node) => node.id === draggingId);
+                if (!placeholder) return null;
+                const size = getNodeSize(placeholder.depth);
+                return (
+                  <rect
+                    x={placeholder.x}
+                    y={placeholder.y}
+                    width={size.width}
+                    height={size.height}
+                    rx={Math.max(10, 15 - placeholder.depth)}
+                    fill="rgba(139,121,255,.045)"
+                    stroke="rgba(168,156,255,.38)"
+                    strokeWidth="1.5"
+                    strokeDasharray="6 6"
+                    pointerEvents="none"
+                  />
+                );
+              })() : null}
+              {map.nodes.map((previewNode) => {
+                const isDraggedSubtree = Boolean(
+                  draggingId && (previewNode.id === draggingId || isDescendant(tree, draggingId, previewNode.id))
+                );
+                const node = isDraggedSubtree
+                  ? baseMap.nodes.find((candidate) => candidate.id === previewNode.id) || previewNode
+                  : previewNode;
+                return (
                 <NodeView
                   key={node.id}
                   node={node}
                   selected={selectedId === node.id}
                   editing={editingId === node.id}
                   dropMode={dropIntent?.targetId === node.id ? dropIntent.mode : null}
+                  animatePosition={!isDraggedSubtree}
                   offset={
                     nodeDragRef.current &&
                     (nodeDragRef.current.id === node.id || isDescendant(tree, nodeDragRef.current.id, node.id))
@@ -381,9 +439,11 @@ export function ResearchMindMapModal({
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setSelectedId(node.id);
                     nodeDragRef.current = { id: node.id, x: event.clientX, y: event.clientY };
+                    setDraggingId(node.id);
                   }}
                 />
-              ))}
+                );
+              })}
             </g>
           </svg>
 
@@ -398,6 +458,7 @@ function NodeView({
   selected,
   editing,
   dropMode,
+  animatePosition,
   offset,
   onSelect,
   onEdit,
@@ -410,6 +471,7 @@ function NodeView({
   selected: boolean;
   editing: boolean;
   dropMode: DropIntent["mode"] | null;
+  animatePosition: boolean;
   offset: { x: number; y: number };
   onSelect: () => void;
   onEdit: () => void;
@@ -422,7 +484,10 @@ function NodeView({
   const lines = wrapLabel(node.label || "未命名节点", node.depth === 0 ? 16 : Math.max(15, 21 - node.depth), 3);
   return (
     <g
-      transform={`translate(${node.x + offset.x} ${node.y + offset.y})`}
+      style={{
+        transform: `translate(${node.x + offset.x}px, ${node.y + offset.y}px)`,
+        transition: animatePosition ? "transform 150ms cubic-bezier(.22,.8,.3,1)" : "none"
+      }}
       onPointerDown={onDragStart}
       onClick={(event) => {
         event.stopPropagation();
@@ -447,21 +512,9 @@ function NodeView({
                 ? "#25242c"
                 : "#1e1e22"
         }
-        stroke={dropMode === "child" ? "#b7aaff" : selected ? "#8f7bff" : "rgba(255,255,255,.11)"}
-        strokeWidth={dropMode === "child" || selected ? 2.5 : 1}
+        stroke={dropMode === "child" ? "rgba(168,156,255,.55)" : selected ? "#8f7bff" : "rgba(255,255,255,.11)"}
+        strokeWidth={dropMode === "child" || selected ? 2 : 1}
       />
-      {dropMode === "before" || dropMode === "after" ? (
-        <line
-          x1="-8"
-          x2={size.width + 8}
-          y1={dropMode === "before" ? -8 : size.height + 8}
-          y2={dropMode === "before" ? -8 : size.height + 8}
-          stroke="#b7aaff"
-          strokeWidth="3"
-          strokeLinecap="round"
-          pointerEvents="none"
-        />
-      ) : null}
       {editing ? (
         <foreignObject x="0" y="0" width={size.width} height={size.height}>
           <input
@@ -576,6 +629,41 @@ function buildMindMapTree(content: string) {
 }
 
 function layoutTree(root: TreeNode) {
+  const detachedRoots = root.children.filter((child) => child.detached);
+  const mainRoot = { ...root, children: root.children.filter((child) => !child.detached) };
+  const main = layoutTreeComponent(mainRoot);
+  const nodes = [...main.nodes];
+  const edges = [...main.edges];
+
+  detachedRoots.forEach((detachedRoot) => {
+    const component = layoutTreeComponent({ ...detachedRoot, detached: false }, 1);
+    const componentRoot = component.nodes.find((node) => node.id === detachedRoot.id);
+    if (!componentRoot) return;
+    const position = detachedRoot.position || { x: 48, y: main.height + 72 };
+    const dx = position.x - componentRoot.x;
+    const dy = position.y - componentRoot.y;
+    component.nodes.forEach((node) => nodes.push({
+      ...node,
+      x: node.x + dx,
+      y: node.y + dy,
+      parentId: node.id === detachedRoot.id ? null : node.parentId
+    }));
+    component.edges.forEach((edge) => edges.push({
+      ...edge,
+      id: `detached-${edge.id}`,
+      path: translateEdgePath(edge.path, dx, dy)
+    }));
+  });
+
+  return {
+    nodes,
+    edges,
+    width: Math.max(...nodes.map((node) => node.x + getNodeSize(node.depth).width), ROOT_NODE_WIDTH) + 28,
+    height: Math.max(...nodes.map((node) => node.y + getNodeSize(node.depth).height), ROOT_NODE_HEIGHT) + 28
+  };
+}
+
+function layoutTreeComponent(root: TreeNode, startDepth = 0) {
   const nodes: LayoutNode[] = [];
   let nextY = 0;
   const position = (node: TreeNode, depth: number, parentId: string | null): LayoutNode => {
@@ -597,7 +685,7 @@ function layoutTree(root: TreeNode) {
     nodes.push(layoutNode);
     return layoutNode;
   };
-  position(root, 0, null);
+  position(root, startDepth, null);
   nodes.sort((a, b) => a.depth - b.depth);
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const edges = nodes.flatMap((parent) => parent.children.map((childRef) => {
@@ -624,9 +712,67 @@ function layoutTree(root: TreeNode) {
   };
 }
 
+function translateEdgePath(path: string, dx: number, dy: number) {
+  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
+  if (!values || values.length !== 8) return path;
+  return `M ${values[0] + dx} ${values[1] + dy} C ${values[2] + dx} ${values[3] + dy}, ${values[4] + dx} ${values[5] + dy}, ${values[6] + dx} ${values[7] + dy}`;
+}
+
+function inferDropIntent({
+  tree,
+  map,
+  draggedId,
+  x,
+  y,
+  current
+}: {
+  tree: TreeNode;
+  map: ReturnType<typeof layoutTree>;
+  draggedId: string;
+  x: number;
+  y: number;
+  current: DropIntent | null;
+}): DropIntent | null {
+  const candidates = map.nodes
+    .filter((node) => node.id !== draggedId && !isDescendant(tree, draggedId, node.id))
+    .map((node) => {
+      const size = getNodeSize(node.depth);
+      const left = node.x - 88;
+      const right = node.x + size.width + 112;
+      const top = node.y - 52;
+      const bottom = node.y + size.height + 52;
+      if (x < left || x > right || y < top || y > bottom) return null;
+      const dx = x < node.x ? node.x - x : x > node.x + size.width ? x - node.x - size.width : 0;
+      const dy = y < node.y ? node.y - y : y > node.y + size.height ? y - node.y - size.height : 0;
+      const score = dx * 0.7 + dy + Math.abs(y - (node.y + size.height / 2)) * 0.08;
+      return { node, size, score };
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+    .sort((a, b) => a.score - b.score);
+
+  const candidate = candidates[0];
+  if (!candidate) return null;
+  const { node, size } = candidate;
+  if (node.id === tree.id) return { targetId: node.id, mode: "child" };
+
+  const childSnapStart = node.x + size.width * 0.72;
+  if (x >= childSnapStart) return { targetId: node.id, mode: "child" };
+
+  const centerY = node.y + size.height / 2;
+  if (
+    current?.targetId === node.id &&
+    (current.mode === "before" || current.mode === "after") &&
+    Math.abs(y - centerY) < 14
+  ) {
+    return current;
+  }
+  return { targetId: node.id, mode: y < centerY ? "before" : "after" };
+}
+
 function compareTrees(original: TreeNode, modified: TreeNode) {
   const originalIndex = indexTree(original);
   const modifiedIndex = indexTree(modified);
+  const ignoredDetachedIds = collectDetachedNodeIds(modified);
   const changes: string[] = [];
   modifiedIndex.forEach((entry, id) => {
     const before = originalIndex.get(id);
@@ -640,7 +786,9 @@ function compareTrees(original: TreeNode, modified: TreeNode) {
     }
   });
   originalIndex.forEach((entry, id) => {
-    if (!modifiedIndex.has(id)) changes.push(`删除“${entry.node.label}”及其下属内容`);
+    if (!modifiedIndex.has(id) && !ignoredDetachedIds.has(id)) {
+      changes.push(`删除“${entry.node.label}”及其下属内容`);
+    }
   });
   return changes;
 }
@@ -653,7 +801,14 @@ function indexTree(root: TreeNode) {
     siblingIndex: number;
   }>();
   const visit = (node: TreeNode, parent: TreeNode | null, siblingIndex: number) => {
-    index.set(node.id, { node, parentId: parent?.id || null, parentLabel: parent?.label || null, siblingIndex });
+    if (node.detached) return;
+    const effectiveParent = parent;
+    index.set(node.id, {
+      node,
+      parentId: effectiveParent?.id || null,
+      parentLabel: effectiveParent?.label || null,
+      siblingIndex
+    });
     node.children.forEach((child, childIndex) => visit(child, node, childIndex));
   };
   visit(root, null, 0);
@@ -664,10 +819,58 @@ function serializeTree(root: TreeNode) {
   const lines: string[] = [];
   const visit = (node: TreeNode, depth: number) => {
     lines.push(`${"  ".repeat(depth)}- ${node.label}`);
-    node.children.forEach((child) => visit(child, depth + 1));
+    node.children.filter((child) => !child.detached).forEach((child) => visit(child, depth + 1));
   };
-  visit(root, 0);
+  visit({ ...root, children: root.children.filter((child) => !child.detached) }, 0);
   return lines.join("\n");
+}
+
+function collectDetachedNodeIds(root: TreeNode) {
+  const ids = new Set<string>();
+  const collect = (node: TreeNode) => {
+    ids.add(node.id);
+    node.children.forEach(collect);
+  };
+  root.children.filter((child) => child.detached).forEach(collect);
+  return ids;
+}
+
+function moveNodeInTree(root: TreeNode, nodeId: string, intent: DropIntent) {
+  const { targetId, mode } = intent;
+  if (nodeId === root.id || nodeId === targetId) return;
+  const movingNode = findNode(root, nodeId);
+  if (!movingNode || findNode(movingNode, targetId)) return;
+  const sourceParent = findParent(root, nodeId);
+  const target = findNode(root, targetId);
+  if (!sourceParent || !target) return;
+  const sourceIndex = sourceParent.children.findIndex((child) => child.id === nodeId);
+  const [removed] = sourceParent.children.splice(sourceIndex, 1);
+  if (!removed) return;
+  delete removed.detached;
+  delete removed.position;
+
+  if (mode === "child" || target.id === root.id) {
+    target.children.push(removed);
+    return;
+  }
+  const targetParent = findParent(root, targetId);
+  if (!targetParent) {
+    sourceParent.children.splice(Math.max(0, sourceIndex), 0, removed);
+    return;
+  }
+  const targetIndex = targetParent.children.findIndex((child) => child.id === targetId);
+  targetParent.children.splice(targetIndex + (mode === "after" ? 1 : 0), 0, removed);
+}
+
+function detachNodeInTree(root: TreeNode, nodeId: string, position: { x: number; y: number }) {
+  const sourceParent = findParent(root, nodeId);
+  if (!sourceParent) return;
+  const sourceIndex = sourceParent.children.findIndex((child) => child.id === nodeId);
+  const [removed] = sourceParent.children.splice(sourceIndex, 1);
+  if (!removed) return;
+  removed.detached = true;
+  removed.position = position;
+  root.children.push(removed);
 }
 
 function findNode(root: TreeNode, id: string): TreeNode | null {

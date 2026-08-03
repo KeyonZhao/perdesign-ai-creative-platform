@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
+  ArrowUp,
   Check,
   Copy,
   Download,
+  FileDown,
   Grid3X3,
   Mic,
   MessageSquareText,
@@ -39,6 +41,7 @@ import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-ba
 import { convertImageDataUrlToPng, prepareImageForVision, prepareLocalEditImages } from "@/lib/image";
 import { buildCreativeDivergencePrompt } from "@/lib/creative-divergence";
 import { buildEcommercePosterPrompt } from "@/lib/ecommerce-poster";
+import { downloadResearchWord } from "@/lib/research-word";
 import {
   addPendingImageJob,
   loadPendingImageJobs,
@@ -239,7 +242,7 @@ export default function Home() {
         .filter((session) =>
           session?.id &&
           Array.isArray(session.messages) &&
-          session.messages.some((message) => message.role === "user" && message.content.trim())
+          hasMeaningfulResearchSessionContent(session.messages)
         )
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 40);
@@ -1813,7 +1816,11 @@ export default function Home() {
         updatedAt: Date.now(),
         messages: imported.messages.map((message) => ({ ...message, id: makeId(`research-${message.role}`) }))
       };
-      setResearchSessions((current) => [session, ...current].slice(0, 40));
+      setResearchSessions((current) => {
+        const next = sortResearchSessionsByUpdatedAt([session, ...current]);
+        persistResearchSessions(next);
+        return next;
+      });
       setActiveResearchSessionId(session.id);
       setResearchMessages(session.messages);
       setResearchInput("");
@@ -2164,7 +2171,11 @@ function ResearchSection({
   const historyImportInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const lastAutoPositionedMessageIdRef = useRef(messages.at(-1)?.id || "");
+  const upwardWheelDistanceRef = useRef(0);
+  const lastUpwardWheelAtRef = useRef(0);
+  const returnToMessageTopTimerRef = useRef<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [showReturnToMessageTop, setShowReturnToMessageTop] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [mindMapMessage, setMindMapMessage] = useState<ResearchMessage | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
@@ -2202,6 +2213,12 @@ function ResearchSection({
     return () => window.cancelAnimationFrame(frameId);
   }, [isResponding, latestMessageId, latestMessageRole, messages.length]);
 
+  useEffect(() => () => {
+    if (returnToMessageTopTimerRef.current !== null) {
+      window.clearTimeout(returnToMessageTopTimerRef.current);
+    }
+  }, []);
+
   async function copyMessage(message: ResearchMessage) {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -2228,6 +2245,49 @@ function ResearchSection({
     range.selectNodeContents(element);
     selection.removeAllRanges();
     selection.addRange(range);
+  }
+
+  function scrollCurrentResearchMessageToTop() {
+    const stream = streamRef.current;
+    if (!stream) return;
+    const streamRect = stream.getBoundingClientRect();
+    const readingLine = streamRect.top + 56;
+    const assistantMessages = Array.from(
+      stream.querySelectorAll<HTMLElement>('[data-research-message-role="assistant"]')
+    );
+    const currentMessage = assistantMessages.find((message) => {
+      const rect = message.getBoundingClientRect();
+      return rect.top <= readingLine && rect.bottom >= readingLine;
+    }) || assistantMessages.find((message) => message.getBoundingClientRect().bottom > readingLine);
+    if (!currentMessage) return;
+    stream.scrollTo({
+      top: Math.max(0, currentMessage.offsetTop - stream.offsetTop - 8),
+      behavior: "smooth"
+    });
+    setShowReturnToMessageTop(false);
+    upwardWheelDistanceRef.current = 0;
+  }
+
+  function detectRapidUpwardResearchScroll(event: React.WheelEvent<HTMLDivElement>) {
+    const now = performance.now();
+    if (event.deltaY >= 0) {
+      upwardWheelDistanceRef.current = 0;
+      return;
+    }
+    if (now - lastUpwardWheelAtRef.current > 420) upwardWheelDistanceRef.current = 0;
+    lastUpwardWheelAtRef.current = now;
+    upwardWheelDistanceRef.current += Math.abs(event.deltaY);
+    if (upwardWheelDistanceRef.current < 150) return;
+
+    setShowReturnToMessageTop(true);
+    if (returnToMessageTopTimerRef.current !== null) {
+      window.clearTimeout(returnToMessageTopTimerRef.current);
+    }
+    returnToMessageTopTimerRef.current = window.setTimeout(() => {
+      setShowReturnToMessageTop(false);
+      upwardWheelDistanceRef.current = 0;
+      returnToMessageTopTimerRef.current = null;
+    }, 1800);
   }
 
   return (
@@ -2341,21 +2401,35 @@ function ResearchSection({
             <strong>{activeSession?.title || "新策划研究"}</strong>
             <span>策划对话与研究结果</span>
           </div>
+          <span className="research-conversation-toolbar-actions">
+            <button
+              type="button"
+              onClick={() => onExportSession(activeSessionId)}
+              disabled={!activeSessionId || isResponding}
+              title="导出当前策划项目"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>导出</span>
+            </button>
+          </span>
+        </div>
+        {showReturnToMessageTop ? (
           <button
             type="button"
-            onClick={() => onExportSession(activeSessionId)}
-            disabled={!activeSessionId || isResponding}
-            title="导出当前策划项目"
+            className="research-return-message-top"
+            onClick={scrollCurrentResearchMessageToTop}
+            title="回到当前回复开头"
+            aria-label="回到当前回复开头"
           >
-            <Download className="h-3.5 w-3.5" />
-            <span>导出</span>
+            <ArrowUp className="h-4 w-4" />
           </button>
-        </div>
-        <div ref={streamRef} className="research-stream">
+        ) : null}
+        <div ref={streamRef} className="research-stream" onWheel={detectRapidUpwardResearchScroll}>
           {messages.map((message) => (
             <article
               key={message.id}
               data-research-message-id={message.id}
+              data-research-message-role={message.role}
               className={`research-message ${message.role}`}
             >
               <div className="research-role">
@@ -2367,20 +2441,33 @@ function ResearchSection({
                   className={`research-bubble ${message.role === "assistant" ? "has-copy" : ""}`}
                   onContextMenu={(event) => selectMessageText(event.currentTarget)}
                 >
-                  {message.content}
+                  {message.role === "assistant"
+                    ? <ResearchMarkdown content={message.content} />
+                    : message.content}
                 </div>
                 {message.role === "assistant" ? (
                   <div className="research-message-tools">
                     {canCreateResearchMindMap(message.content) ? (
-                      <button
-                        type="button"
-                        className="research-message-tool"
-                        onClick={() => setMindMapMessage(message)}
-                        title="转为思维导图"
-                        aria-label="转为思维导图"
-                      >
-                        <Network className="h-3.5 w-3.5" />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="research-message-tool"
+                          onClick={() => setMindMapMessage(message)}
+                          title="转为思维导图"
+                          aria-label="转为思维导图"
+                        >
+                          <Network className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          className="research-message-tool"
+                          onClick={() => void downloadResearchWord(message.content, activeSession?.title || "产品策划案")}
+                          title="导出 Word"
+                          aria-label="导出 Word"
+                        >
+                          <FileDown className="h-3.5 w-3.5" />
+                        </button>
+                      </>
                     ) : null}
                     <button
                       type="button"
@@ -2533,6 +2620,93 @@ function canCreateResearchMindMap(content: string) {
   return content.length >= 280 && structuralLines.length >= 4;
 }
 
+function ResearchMarkdown({ content }: { content: string }) {
+  const lines = content.replace(/\r/g, "").split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.+)/);
+    if (heading) {
+      const level = heading[1].length;
+      const children = renderResearchInlineMarkdown(heading[2]);
+      blocks.push(level === 1
+        ? <h1 key={`h-${index}`}>{children}</h1>
+        : level === 2
+          ? <h2 key={`h-${index}`}>{children}</h2>
+          : level === 3
+            ? <h3 key={`h-${index}`}>{children}</h3>
+            : <h4 key={`h-${index}`}>{children}</h4>);
+      index += 1;
+      continue;
+    }
+    if (/^\s*[-*•]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (index < lines.length && /^\s*[-*•]\s+/.test(lines[index])) {
+        items.push(<li key={`ul-${index}`}>{renderResearchInlineMarkdown(lines[index].replace(/^\s*[-*•]\s+/, ""))}</li>);
+        index += 1;
+      }
+      blocks.push(<ul key={`ul-block-${index}`}>{items}</ul>);
+      continue;
+    }
+    if (/^\s*\d+[.)、]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (index < lines.length && /^\s*\d+[.)、]\s+/.test(lines[index])) {
+        items.push(<li key={`ol-${index}`}>{renderResearchInlineMarkdown(lines[index].replace(/^\s*\d+[.)、]\s+/, ""))}</li>);
+        index += 1;
+      }
+      blocks.push(<ol key={`ol-block-${index}`}>{items}</ol>);
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const quote: string[] = [];
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        quote.push(lines[index].replace(/^\s*>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(<blockquote key={`quote-${index}`}>{renderResearchInlineMarkdown(quote.join(" "))}</blockquote>);
+      continue;
+    }
+    if (/^\s*---+\s*$/.test(line)) {
+      blocks.push(<hr key={`hr-${index}`} />);
+      index += 1;
+      continue;
+    }
+
+    const paragraph: string[] = [line.trim()];
+    index += 1;
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !/^(#{1,4})\s+/.test(lines[index]) &&
+      !/^\s*(?:[-*•]\s+|\d+[.)、]\s+|>\s?)/.test(lines[index])
+    ) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(<p key={`p-${index}`}>{renderResearchInlineMarkdown(paragraph.join(" "))}</p>);
+  }
+
+  return <div className="research-markdown">{blocks}</div>;
+}
+
+function renderResearchInlineMarkdown(text: string) {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={`${index}-${part}`}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={`${index}-${part}`}>{part.slice(1, -1)}</code>;
+    }
+    return part;
+  });
+}
+
 function createResearchWelcomeMessages(): ResearchMessage[] {
   return [
     {
@@ -2559,6 +2733,13 @@ function sanitizeResearchMessages(messages: ResearchMessage[]): ResearchMessage[
     content: message.content,
     sources: message.sources
   }));
+}
+
+function hasMeaningfulResearchSessionContent(messages: ResearchMessage[]) {
+  return messages.some((message) =>
+    message.role === "user" ||
+    (message.role === "assistant" && message.content.trim() !== RESEARCH_WELCOME_MESSAGE)
+  );
 }
 
 function persistResearchSessions(sessions: ResearchSession[]) {
