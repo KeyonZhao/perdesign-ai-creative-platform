@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 type HoleShape = "circle" | "rectangle" | "polygon" | "star" | "slot" | "svg";
-type LayoutMode = "grid" | "honeycomb" | "radial" | "spiral" | "fibonacci";
+type LayoutMode = "grid" | "honeycomb" | "hex-tiling" | "radial" | "spiral" | "fibonacci";
 type PanelShape = "rectangle" | "circle" | "polygon" | "custom";
 type GradientMode = "none" | "radial" | "horizontal" | "vertical" | "diagonal" | "angle" | "wave" | "point";
 type DensityMode = "none" | "center-dense" | "edge-dense" | "gradient";
@@ -28,7 +28,10 @@ type VentParams = {
   panelShape: PanelShape;
   panelWidth: number;
   panelHeight: number;
-  margin: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
   holeSize: number;
   holeHeight: number;
   pitchX: number;
@@ -89,7 +92,10 @@ const defaults: VentParams = {
   panelShape: "rectangle",
   panelWidth: 180,
   panelHeight: 100,
-  margin: 10,
+  marginLeft: 10,
+  marginRight: 10,
+  marginTop: 10,
+  marginBottom: 10,
   holeSize: 4,
   holeHeight: 4,
   pitchX: 8,
@@ -131,6 +137,7 @@ const holeShapeOptions: Array<{ value: HoleShape; label: string }> = [
 const layoutOptions: Array<{ value: LayoutMode; label: string }> = [
   { value: "grid", label: "网格排列" },
   { value: "honeycomb", label: "蜂窝错位" },
+  { value: "hex-tiling", label: "六边形蜂窝阵列" },
   { value: "radial", label: "同心圆排列" },
   { value: "spiral", label: "螺旋排列" },
   { value: "fibonacci", label: "斐波那契排列" }
@@ -186,6 +193,7 @@ export function VentEditor() {
   const previewRef = useRef<SVGSVGElement | null>(null);
   const marginInputRef = useRef<HTMLInputElement | null>(null);
   const marginDraggingRef = useRef(false);
+  const marginDraggingSideRef = useRef<"left" | "right" | "top" | "bottom">("top");
   const maskDraggingRef = useRef<{
     startClientX: number;
     startClientY: number;
@@ -211,7 +219,10 @@ export function VentEditor() {
   const openArea = useMemo(() => holes.reduce((sum, item) => sum + itemArea(item), 0), [holes]);
   const panelArea = useMemo(() => polygonArea(panelOutline), [panelOutline]);
   const openRate = panelArea > 0 ? (openArea / panelArea) * 100 : 0;
-  const maximumMargin = Math.max(0, Math.floor(Math.min(params.panelWidth, params.panelHeight) / 2 - 0.5));
+  const maximumLeftMargin = Math.max(0, params.panelWidth - params.marginRight - 0.5);
+  const maximumRightMargin = Math.max(0, params.panelWidth - params.marginLeft - 0.5);
+  const maximumTopMargin = Math.max(0, params.panelHeight - params.marginBottom - 0.5);
+  const maximumBottomMargin = Math.max(0, params.panelHeight - params.marginTop - 0.5);
   const holeDensity = densityLevelFromParams(params);
 
   useEffect(() => {
@@ -225,6 +236,20 @@ export function VentEditor() {
 
   function patch<K extends keyof VentParams>(key: K, value: VentParams[K]) {
     setParams((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateLayout(value: LayoutMode) {
+    setParams((current) => value === "hex-tiling"
+      ? {
+          ...current,
+          layout: value,
+          holeShape: "polygon",
+          sides: 6,
+          holeRotation: 0,
+          pitchX: roundToHalf(Math.max(0.5, current.holeSize * 0.95)),
+          pitchY: roundToHalf(Math.max(0.5, current.holeSize * 1.1))
+        }
+      : { ...current, layout: value });
   }
 
   function updateHoleSize(value: number) {
@@ -268,13 +293,15 @@ export function VentEditor() {
     setParams((current) => {
       const panelWidth = key === "panelWidth" ? dimension : current.panelWidth;
       const panelHeight = key === "panelHeight" ? dimension : current.panelHeight;
+      const [marginLeft, marginRight] = fitMarginPair(current.marginLeft, current.marginRight, panelWidth);
+      const [marginTop, marginBottom] = fitMarginPair(current.marginTop, current.marginBottom, panelHeight);
       return {
         ...current,
         [key]: dimension,
-        margin: Math.min(
-          current.margin,
-          Math.max(0, Math.floor(Math.min(panelWidth, panelHeight) / 2 - 0.5))
-        )
+        marginLeft,
+        marginRight,
+        marginTop,
+        marginBottom
       };
     });
   }
@@ -401,14 +428,22 @@ export function VentEditor() {
     });
   }
 
-  function marginFromPointer(event: React.PointerEvent<SVGGElement>) {
+  function marginFromPointer(event: React.PointerEvent<SVGGElement>, side = marginDraggingSideRef.current) {
     const svg = previewRef.current;
-    if (!svg) return params.margin;
+    if (!svg) return getMarginForSide(params, side);
     const rect = svg.getBoundingClientRect();
-    if (!rect.width || !rect.height) return params.margin;
+    if (!rect.width || !rect.height) return getMarginForSide(params, side);
     const x = ((event.clientX - rect.left) / rect.width) * params.panelWidth;
     const y = ((event.clientY - rect.top) / rect.height) * params.panelHeight;
-    return clamp(Math.round(Math.min(x, params.panelWidth - x, y, params.panelHeight - y) * 2) / 2, 0, maximumMargin);
+    const value = side === "left" ? x : side === "right" ? params.panelWidth - x : side === "top" ? y : params.panelHeight - y;
+    const maximum = side === "left"
+      ? maximumLeftMargin
+      : side === "right"
+        ? maximumRightMargin
+        : side === "top"
+          ? maximumTopMargin
+          : maximumBottomMargin;
+    return clamp(Math.round(value * 2) / 2, 0, maximum);
   }
 
   function startMarginEditing(event: React.PointerEvent<SVGGElement>) {
@@ -416,12 +451,26 @@ export function VentEditor() {
     setMaskSelected(false);
     setMarginSelected(true);
     marginDraggingRef.current = true;
+    const svg = previewRef.current;
+    if (svg) {
+      const rect = svg.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * params.panelWidth;
+      const y = ((event.clientY - rect.top) / rect.height) * params.panelHeight;
+      const distances = [
+        { side: "left" as const, value: x / Math.max(1, params.panelWidth) },
+        { side: "right" as const, value: (params.panelWidth - x) / Math.max(1, params.panelWidth) },
+        { side: "top" as const, value: y / Math.max(1, params.panelHeight) },
+        { side: "bottom" as const, value: (params.panelHeight - y) / Math.max(1, params.panelHeight) }
+      ];
+      marginDraggingSideRef.current = distances.sort((a, b) => a.value - b.value)[0].side;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function dragMargin(event: React.PointerEvent<SVGGElement>) {
     if (!marginDraggingRef.current) return;
-    patch("margin", marginFromPointer(event));
+    const side = marginDraggingSideRef.current;
+    patch(marginKeyForSide(side), marginFromPointer(event, side));
   }
 
   function stopMarginEditing(event: React.PointerEvent<SVGGElement>) {
@@ -585,7 +634,7 @@ export function VentEditor() {
               label="排列方式"
               value={params.layout}
               options={layoutOptions}
-              onChange={(value) => patch("layout", value as LayoutMode)}
+              onChange={(value) => updateLayout(value as LayoutMode)}
             />
             <SelectField
               label="面板形状"
@@ -598,6 +647,44 @@ export function VentEditor() {
               ]}
               onChange={(value) => patch("panelShape", value as PanelShape)}
             />
+            <div className="vent-field-grid">
+              <NumberField
+                label="左安全边距"
+                value={params.marginLeft}
+                min={0}
+                max={maximumLeftMargin}
+                step={0.5}
+                unit="mm"
+                onChange={(value) => patch("marginLeft", clamp(value, 0, maximumLeftMargin))}
+              />
+              <NumberField
+                label="右安全边距"
+                value={params.marginRight}
+                min={0}
+                max={maximumRightMargin}
+                step={0.5}
+                unit="mm"
+                onChange={(value) => patch("marginRight", clamp(value, 0, maximumRightMargin))}
+              />
+              <NumberField
+                label="上安全边距"
+                value={params.marginTop}
+                min={0}
+                max={maximumTopMargin}
+                step={0.5}
+                unit="mm"
+                onChange={(value) => patch("marginTop", clamp(value, 0, maximumTopMargin))}
+              />
+              <NumberField
+                label="下安全边距"
+                value={params.marginBottom}
+                min={0}
+                max={maximumBottomMargin}
+                step={0.5}
+                unit="mm"
+                onChange={(value) => patch("marginBottom", clamp(value, 0, maximumBottomMargin))}
+              />
+            </div>
             {params.panelShape === "polygon" ? (
               <NumberField label="面板边数" value={params.sides} min={3} max={16} step={1} onChange={(value) => patch("sides", Math.round(value))} />
             ) : null}
@@ -968,7 +1055,7 @@ export function VentEditor() {
                 <g
                   className={`vent-safety-outline ${marginSelected ? "selected" : ""}`}
                   role="button"
-                  aria-label={`安全边距 ${formatNumber(params.margin)} 毫米，点击编辑`}
+                  aria-label={`左 ${formatNumber(params.marginLeft)}、右 ${formatNumber(params.marginRight)}、上 ${formatNumber(params.marginTop)}、下 ${formatNumber(params.marginBottom)} 毫米，点击编辑`}
                   tabIndex={0}
                   onPointerDown={startMarginEditing}
                   onPointerMove={dragMargin}
@@ -1045,23 +1132,22 @@ export function VentEditor() {
                 <label
                   className="vent-safety-inline-editor"
                   style={{
-                    top: `${clamp((params.margin / params.panelHeight) * 100, 4, 94)}%`
+                    top: `${clamp((params.marginTop / params.panelHeight) * 100, 4, 94)}%`
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
                 >
                   <input
                     ref={marginInputRef}
                     type="number"
-                    value={params.margin}
+                    value={params.marginLeft}
                     min={0}
-                    max={maximumMargin}
+                    max={maximumLeftMargin}
                     step={0.5}
-                    aria-label="画布安全边距"
+                    aria-label="左安全边距"
                     onFocus={(event) => event.currentTarget.select()}
-                    onBlur={() => setMarginSelected(false)}
                     onChange={(event) => {
                       const value = Number(event.target.value);
-                      if (Number.isFinite(value)) patch("margin", clamp(value, 0, maximumMargin));
+                      if (Number.isFinite(value)) patch("marginLeft", clamp(value, 0, maximumLeftMargin));
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
@@ -1074,7 +1160,56 @@ export function VentEditor() {
                       }
                     }}
                   />
-                  <span>mm</span>
+                  <span>左</span>
+                  <input
+                    type="number"
+                    value={params.marginRight}
+                    min={0}
+                    max={maximumRightMargin}
+                    step={0.5}
+                    aria-label="右安全边距"
+                    onFocus={(event) => event.currentTarget.select()}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (Number.isFinite(value)) patch("marginRight", clamp(value, 0, maximumRightMargin));
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                      if (event.key === "Escape") {
+                        setMarginSelected(false);
+                        previewRef.current?.focus();
+                      }
+                    }}
+                  />
+                  <span>右</span>
+                  <input
+                    type="number"
+                    value={params.marginTop}
+                    min={0}
+                    max={maximumTopMargin}
+                    step={0.5}
+                    aria-label="上安全边距"
+                    onFocus={(event) => event.currentTarget.select()}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (Number.isFinite(value)) patch("marginTop", clamp(value, 0, maximumTopMargin));
+                    }}
+                  />
+                  <span>上</span>
+                  <input
+                    type="number"
+                    value={params.marginBottom}
+                    min={0}
+                    max={maximumBottomMargin}
+                    step={0.5}
+                    aria-label="下安全边距"
+                    onFocus={(event) => event.currentTarget.select()}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (Number.isFinite(value)) patch("marginBottom", clamp(value, 0, maximumBottomMargin));
+                    }}
+                  />
+                  <span>下 mm</span>
                 </label>
               ) : null}
             </div>
@@ -1791,15 +1926,20 @@ function pointInsidePngMask(
 function createLayoutCandidates(params: VentParams) {
   const width = params.panelWidth;
   const height = params.panelHeight;
-  const margin = Math.min(params.margin, width / 2, height / 2);
-  const usableWidth = Math.max(1, width - margin * 2);
-  const usableHeight = Math.max(1, height - margin * 2);
+  const marginLeft = Math.min(params.marginLeft, width - 0.5);
+  const marginRight = Math.min(params.marginRight, width - marginLeft - 0.5);
+  const marginTop = Math.min(params.marginTop, height - 0.5);
+  const marginBottom = Math.min(params.marginBottom, height - marginTop - 0.5);
+  const usableWidth = Math.max(1, width - marginLeft - marginRight);
+  const usableHeight = Math.max(1, height - marginTop - marginBottom);
+  const safeCenterX = marginLeft + usableWidth / 2;
+  const safeCenterY = marginTop + usableHeight / 2;
   const pitchX = Math.max(0.5, params.pitchX);
   const pitchY = Math.max(0.5, params.pitchY);
   const out: Array<{ x: number; y: number; row: number; column: number; rotation: number }> = [];
 
   if (params.layout === "radial") {
-    const maxRadius = Math.max(0, Math.min(width, height) / 2 - margin);
+    const maxRadius = Math.max(0, Math.min(usableWidth, usableHeight) / 2);
     const rings = params.rows || Math.max(1, Math.floor(maxRadius / pitchY));
     for (let ring = 0; ring <= rings; ring += 1) {
       const radius = ring * maxRadius / Math.max(1, rings);
@@ -1807,8 +1947,8 @@ function createLayoutCandidates(params: VentParams) {
       for (let index = 0; index < count; index += 1) {
         const angle = count === 1 ? 0 : 2 * Math.PI * index / count;
         out.push({
-          x: width / 2 + Math.cos(angle) * radius,
-          y: height / 2 + Math.sin(angle) * radius,
+          x: safeCenterX + Math.cos(angle) * radius,
+          y: safeCenterY + Math.sin(angle) * radius,
           row: ring,
           column: index,
           rotation: angle
@@ -1819,7 +1959,7 @@ function createLayoutCandidates(params: VentParams) {
   }
 
   if (params.layout === "spiral" || params.layout === "fibonacci") {
-    const maxRadius = Math.max(0, Math.min(width, height) / 2 - margin);
+    const maxRadius = Math.max(0, Math.min(usableWidth, usableHeight) / 2);
     const automaticCount = Math.max(30, Math.floor(width * height / Math.max(1, pitchX * pitchY) * 0.78));
     const count = Math.min(MAX_HOLE_COUNT, params.rows && params.columns ? params.rows * params.columns : automaticCount);
     const goldenAngle = degrees(137.5);
@@ -1828,8 +1968,8 @@ function createLayoutCandidates(params: VentParams) {
       const angle = params.layout === "spiral" ? Math.PI * 12 * progress : goldenAngle * index;
       const radius = maxRadius * Math.sqrt(progress);
       out.push({
-        x: width / 2 + Math.cos(angle) * radius,
-        y: height / 2 + Math.sin(angle) * radius,
+        x: safeCenterX + Math.cos(angle) * radius,
+        y: safeCenterY + Math.sin(angle) * radius,
         row: index,
         column: 0,
         rotation: angle
@@ -1854,8 +1994,8 @@ function createLayoutCandidates(params: VentParams) {
   const centerHeight = Math.max(0, usableHeight - (halfHoleHeight + boundaryClearance) * 2);
   const columns = params.columns || Math.max(1, Math.floor(centerWidth / pitchX) + 1);
   const rows = params.rows || Math.max(1, Math.floor(centerHeight / actualPitchY) + 1);
-  const startX = (width - (columns - 1) * pitchX) / 2;
-  const startY = (height - (rows - 1) * actualPitchY) / 2;
+  const startX = marginLeft + (usableWidth - (columns - 1) * pitchX) / 2;
+  const startY = marginTop + (usableHeight - (rows - 1) * actualPitchY) / 2;
 
   for (let row = 0; row < rows; row += 1) {
     const shift = params.layout === "honeycomb" && row % 2 ? pitchX / 2 : 0;
@@ -1863,7 +2003,7 @@ function createLayoutCandidates(params: VentParams) {
       if (out.length >= MAX_HOLE_COUNT) return out;
       out.push({
         x: startX + column * pitchX + shift,
-        y: startY + row * actualPitchY,
+        y: startY + row * actualPitchY + (params.layout === "hex-tiling" && column % 2 ? actualPitchY / 2 : 0),
         row,
         column,
         rotation: 0
@@ -1995,29 +2135,27 @@ function fitImportedPanelOutline(points: Array<[number, number]>, width: number,
 }
 
 function makeSafetyOutline(params: VentParams, panelOutline = makePanelOutline(params)) {
-  const margin = Math.min(params.margin, params.panelWidth / 2 - 0.1, params.panelHeight / 2 - 0.1);
   const width = params.panelWidth;
   const height = params.panelHeight;
-  if (params.panelShape === "custom" && panelOutline.length) {
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const scale = Math.max(0.01, 1 - margin * 2 / Math.max(0.1, Math.min(width, height)));
+  const marginLeft = Math.min(params.marginLeft, width - 0.1);
+  const marginRight = Math.min(params.marginRight, width - marginLeft - 0.1);
+  const marginTop = Math.min(params.marginTop, height - 0.1);
+  const marginBottom = Math.min(params.marginBottom, height - marginTop - 0.1);
+  if (params.panelShape !== "rectangle" && panelOutline.length) {
+    const centerX = width / 2 + (marginLeft - marginRight) / 2;
+    const centerY = height / 2 + (marginTop - marginBottom) / 2;
+    const scaleX = Math.max(0.01, 1 - (marginLeft + marginRight) / Math.max(0.1, width));
+    const scaleY = Math.max(0.01, 1 - (marginTop + marginBottom) / Math.max(0.1, height));
     return panelOutline.map(([x, y]) => [
-      centerX + (x - centerX) * scale,
-      centerY + (y - centerY) * scale
+      centerX + (x - width / 2) * scaleX,
+      centerY + (y - height / 2) * scaleY
     ] as [number, number]);
   }
-  if (params.panelShape === "circle") {
-    return regularPolygon(width / 2, height / 2, Math.max(0.1, Math.min(width, height) / 2 - margin), 72, -Math.PI / 2);
-  }
-  if (params.panelShape === "polygon") {
-    return regularPolygon(width / 2, height / 2, Math.max(0.1, Math.min(width, height) / 2 - margin), params.sides, -Math.PI / 2);
-  }
   return [
-    [margin, margin],
-    [width - margin, margin],
-    [width - margin, height - margin],
-    [margin, height - margin]
+    [marginLeft, marginTop],
+    [width - marginRight, marginTop],
+    [width - marginRight, height - marginBottom],
+    [marginLeft, height - marginBottom]
   ] as Array<[number, number]>;
 }
 
@@ -2197,6 +2335,24 @@ function degrees(value: number) {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function fitMarginPair(first: number, second: number, dimension: number): [number, number] {
+  const maximumTotal = Math.max(0, dimension - 0.5);
+  const total = first + second;
+  if (total <= maximumTotal) return [first, second];
+  if (total <= 0) return [0, 0];
+  const scale = maximumTotal / total;
+  return [Math.round(first * scale * 2) / 2, Math.round(second * scale * 2) / 2];
+}
+
+function marginKeyForSide(side: "left" | "right" | "top" | "bottom") {
+  return `margin${side[0].toUpperCase()}${side.slice(1)}` as
+    "marginLeft" | "marginRight" | "marginTop" | "marginBottom";
+}
+
+function getMarginForSide(params: VentParams, side: "left" | "right" | "top" | "bottom") {
+  return params[marginKeyForSide(side)];
 }
 
 function densityPitchBounds(_params: VentParams) {
