@@ -445,6 +445,94 @@ export default function Home() {
     pushToast("success", "3D模型已生成并保存到画廊。");
   }
 
+  async function upscaleImage(result: GenerationResult) {
+    if (!result.imageBase64) return pushToast("error", "当前图片无法进行高清放大。");
+    setStatus("generating");
+    setPendingGenerationCount(1);
+    setActiveGenerationBatchId(makeId("upscale-pending"));
+    try {
+      const sourceSize = await getDataUrlImageSize(result.imageBase64);
+      const targetWidth = sourceSize.width * 2;
+      const targetHeight = sourceSize.height * 2;
+      if (targetWidth * targetHeight > 34_000_000) {
+        throw new Error("当前图片已经很大，放大 2 倍会超过 SeedVR2-7B 的 3400 万像素上限。");
+      }
+
+      pushToast("info", "正在提交 SeedVR2-7B 高清放大任务…");
+      const createResponse = await fetch("/api/upscale", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: result.imageBase64,
+          size: `${targetWidth}x${targetHeight}`
+        })
+      });
+      const createPayload = await readApiResponse<{ taskId?: string; error?: string }>(createResponse);
+      if (!createResponse.ok || !createPayload.taskId) {
+        throw new Error(createPayload.error || "高清放大服务没有返回任务编号。");
+      }
+
+      let upscaledImage = "";
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        await waitForImageJobPoll(attempt === 0 ? 1800 : Math.min(5000, 2200 + attempt * 120));
+        const statusResponse = await fetch(
+          `/api/upscale/status?taskId=${encodeURIComponent(createPayload.taskId)}`,
+          { cache: "no-store" }
+        );
+        const statusPayload = await readApiResponse<{
+          status?: string;
+          imageBase64?: string;
+          error?: string;
+        }>(statusResponse);
+        if (statusPayload.status === "done" && statusPayload.imageBase64) {
+          upscaledImage = statusPayload.imageBase64;
+          break;
+        }
+        if (!statusResponse.ok && statusResponse.status !== 202) {
+          throw new Error(statusPayload.error || "高清放大任务失败。");
+        }
+      }
+      if (!upscaledImage) throw new Error("高清放大等待超时，请稍后重试。");
+
+      const currentBatches = generationBatchesRef.current;
+      const sourceBatch = currentBatches.find((batch) =>
+        batch.results.some((item) => item.id === result.id)
+      );
+      const hdNumber = currentBatches.reduce(
+        (sum, batch) => sum + batch.results.filter((item) => batch.metadata?.generationType === "upscale" && item.imageBase64).length,
+        0
+      ) + 1;
+      const upscaleBatch: GenerationBatch = {
+        id: makeId("upscale-batch"),
+        metadata: {
+          productName: sourceBatch?.metadata?.productName,
+          description: `由 ${result.title || "当前图片"} 使用 SeedVR2-7B 放大至 ${targetWidth}×${targetHeight}`,
+          innovationLevel: 0,
+          generationType: "upscale",
+          productImage: { name: `${result.title || "source"}.png`, dataUrl: result.imageBase64 }
+        },
+        results: [{
+          id: makeId("upscale"),
+          title: `HD ${String(hdNumber).padStart(2, "0")}`,
+          prompt: `SeedVR2-7B 2× 高清放大 · ${targetWidth}×${targetHeight}`,
+          imageBase64: upscaledImage
+        }]
+      };
+      const nextBatches = [...currentBatches, upscaleBatch];
+      generationBatchesRef.current = nextBatches;
+      setGenerationBatches(nextBatches);
+      setActiveGenerationBatchId(upscaleBatch.id);
+      setPendingGenerationCount(0);
+      setStatus("success");
+      await persistGeneratedBatch(upscaleBatch);
+      pushToast("success", `高清放大完成，已保存为 ${targetWidth}×${targetHeight} 新图片。`);
+    } catch (error) {
+      setPendingGenerationCount(0);
+      setStatus("error");
+      pushToast("error", error instanceof Error ? error.message : "高清放大失败，请稍后重试。");
+    }
+  }
+
   async function pollImageJob(
     jobId: string,
     config: {
@@ -1985,6 +2073,7 @@ export default function Home() {
                     onGenerateFromPrompt={generateFromImagePrompt}
                     onGenerateDesignDescription={generateDesignDescription}
                     onModelGenerated={saveGeneratedModel}
+                    onUpscale={upscaleImage}
                     onGenerateVideo={generateVideo}
                     designDescriptionLoadingIds={designDescriptionLoadingIds}
                     onLocalEdit={generateLocalEdit}
@@ -2936,6 +3025,21 @@ class TerminalImageJobError extends Error {
 
 function waitForImageJobPoll(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+function getDataUrlImageSize(dataUrl: string) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      if (!image.naturalWidth || !image.naturalHeight) {
+        reject(new Error("无法读取当前图片尺寸。"));
+        return;
+      }
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.onerror = () => reject(new Error("无法读取当前图片尺寸。"));
+    image.src = dataUrl;
+  });
 }
 
 function sortGenerationResults(results: GenerationResult[]) {

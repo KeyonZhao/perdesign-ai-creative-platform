@@ -32,6 +32,7 @@ type GalleryProps = {
   onGenerateFromPrompt: (result: GenerationResult, instruction: string, referenceImages?: GenerationSourceImage[]) => void;
   onGenerateDesignDescription: (result: GenerationResult) => Promise<string>;
   onModelGenerated: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
+  onUpscale: (result: GenerationResult) => void | Promise<void>;
   onGenerateVideo: (result: GenerationResult, request: VideoGenerationRequest) => void;
   designDescriptionLoadingIds: string[];
   onLocalEdit: (
@@ -70,6 +71,7 @@ export function Gallery({
   onGenerateFromPrompt,
   onGenerateDesignDescription,
   onModelGenerated,
+  onUpscale,
   onGenerateVideo,
   designDescriptionLoadingIds,
   onLocalEdit,
@@ -383,6 +385,13 @@ export function Gallery({
           setPreviewStartsEditing(false);
         }}
         onModelGenerated={onModelGenerated}
+        onUpscale={(result) => {
+          void onUpscale(result);
+          setPreview(null);
+          setPreviewMetadata(null);
+          setPreviewStartsEditing(false);
+          setPreviewStartsModel(false);
+        }}
         isGeneratingDesignDescription={Boolean(preview && designDescriptionLoadingIds.includes(preview.id))}
         onLocalEdit={(result, maskImageBase64, instruction, guideImageBase64) => {
           onLocalEdit(result, maskImageBase64, instruction, guideImageBase64);

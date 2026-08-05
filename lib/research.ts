@@ -106,6 +106,7 @@ export async function generateResearchReply(params: {
     baseUrl: params.baseUrl,
     model: params.model,
     temperature: 0.55,
+    maxCompletionTokens: 16000,
     messages: [
       {
         role: "system" as const,
@@ -125,9 +126,39 @@ export async function generateResearchReply(params: {
       }))
     ]
   };
-  const answer = params.onDelta
-    ? await streamChatCompletion(completionParams, params.onDelta)
-    : await callChatCompletion(completionParams);
+  let answer: string;
+  if (params.onDelta) {
+    const firstResult = await streamChatCompletion(completionParams, params.onDelta);
+    answer = firstResult.content;
+    let finishReason = firstResult.finishReason;
+    let continuationCount = 0;
+    while (finishReason === "length" && continuationCount < 4) {
+      continuationCount += 1;
+      const continuationResult = await streamChatCompletion(
+        {
+          ...completionParams,
+          messages: [
+            ...completionParams.messages,
+            { role: "assistant" as const, content: answer },
+            {
+              role: "user" as const,
+              content: [
+                "上一段回复因为单次输出长度上限被截断。",
+                "请从刚才停止的位置直接继续，补齐尚未完成的策划案。",
+                "不要重复已经输出的标题、段落或内容，不要添加‘续写’之类的说明。",
+                "完成全部剩余章节后正常收尾。"
+              ].join("\n")
+            }
+          ]
+        },
+        params.onDelta
+      );
+      answer += continuationResult.content;
+      finishReason = continuationResult.finishReason;
+    }
+  } else {
+    answer = await callChatCompletion(completionParams);
+  }
 
   return {
     answer,

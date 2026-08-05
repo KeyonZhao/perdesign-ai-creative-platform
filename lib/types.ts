@@ -68,6 +68,7 @@ export type GenerationType =
   | "divergence"
   | "local-edit"
   | "image-prompt"
+  | "upscale"
   | "video";
 
 export type GenerationMetadata = {

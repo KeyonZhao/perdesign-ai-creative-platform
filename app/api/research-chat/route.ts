@@ -3,6 +3,9 @@ import { z } from "zod";
 import { resolveProviderConfig } from "@/lib/provider";
 import { generateResearchReply } from "@/lib/research";
 
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 const imageSchema = z.object({
   name: z.string().min(1),
   dataUrl: z.string().startsWith("data:image/")

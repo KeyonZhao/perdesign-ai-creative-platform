@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
+import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import type { CreativeDivergenceRequest, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage, VideoGenerationRequest } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
@@ -26,6 +26,7 @@ type ImagePreviewModalProps = {
   onGenerateDesignDescription?: (result: GenerationResult) => Promise<string>;
   onLocalEdit?: (result: GenerationResult, maskImageBase64: string, instruction: string, guideImageBase64?: string) => void;
   onModelGenerated?: (sourceResult: GenerationResult, modelBlob: Blob, modelTaskId: string) => void | Promise<void>;
+  onUpscale?: (result: GenerationResult) => void | Promise<void>;
   onDelete?: (result: GenerationResult) => void | Promise<void>;
   startEditing?: boolean;
   startModelPanel?: boolean;
@@ -63,6 +64,7 @@ export function ImagePreviewModal({
   onGenerateDesignDescription,
   onLocalEdit,
   onModelGenerated,
+  onUpscale,
   onDelete,
   startEditing = false,
   startModelPanel = false,
@@ -116,7 +118,6 @@ export function ImagePreviewModal({
   const [designDescriptionError, setDesignDescriptionError] = useState("");
   const [hasCopiedDescription, setHasCopiedDescription] = useState(false);
   const [isSourceDescriptionExpanded, setIsSourceDescriptionExpanded] = useState(false);
-  const [isPosterZoomOpen, setIsPosterZoomOpen] = useState(false);
   const [selectedDivergenceQuadrant, setSelectedDivergenceQuadrant] =
     useState<DivergenceQuadrantPosition | null>(null);
   const [isModelPanelOpen, setIsModelPanelOpen] = useState(false);
@@ -128,6 +129,60 @@ export function ImagePreviewModal({
   const [modelUrl, setModelUrl] = useState("");
   const [modelBlob, setModelBlob] = useState<Blob | undefined>();
   const [modelTaskId, setModelTaskId] = useState("");
+  const [isUpscaling, setIsUpscaling] = useState(false);
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
+  const [isPreviewPanning, setIsPreviewPanning] = useState(false);
+  const previewPanStartRef = useRef({ pointerX: 0, pointerY: 0, panX: 0, panY: 0 });
+  const previewDidPanRef = useRef(false);
+
+  async function upscaleCurrentImage() {
+    if (!onUpscale || isUpscaling || isGeneratingVariant || !result?.imageBase64) return;
+    setIsUpscaling(true);
+    try {
+      await onUpscale(result);
+    } finally {
+      setIsUpscaling(false);
+    }
+  }
+
+  function startPreviewPan(event: ReactPointerEvent<HTMLImageElement>) {
+    if (isEditing) return;
+    previewDidPanRef.current = false;
+    if (previewZoom <= 1) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    previewPanStartRef.current = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      panX: previewPan.x,
+      panY: previewPan.y
+    };
+    setIsPreviewPanning(true);
+  }
+
+  function movePreviewPan(event: ReactPointerEvent<HTMLImageElement>) {
+    if (!isPreviewPanning) return;
+    const deltaX = event.clientX - previewPanStartRef.current.pointerX;
+    const deltaY = event.clientY - previewPanStartRef.current.pointerY;
+    if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) previewDidPanRef.current = true;
+    setPreviewPan({
+      x: previewPanStartRef.current.panX + deltaX,
+      y: previewPanStartRef.current.panY + deltaY
+    });
+  }
+
+  function stopPreviewPan(event: ReactPointerEvent<HTMLImageElement>) {
+    if (isEditing) return;
+    if (!isPreviewPanning) {
+      if (previewZoom === 1 && !previewDidPanRef.current) setPreviewZoom(2);
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsPreviewPanning(false);
+  }
   const [modelGenerationError, setModelGenerationError] = useState("");
 
   activeResultIdRef.current = result?.id;
@@ -152,6 +207,9 @@ export function ImagePreviewModal({
     });
     setEcommerceInstruction("");
     setIsDivergenceOpen(false);
+    setPreviewZoom(1);
+    setPreviewPan({ x: 0, y: 0 });
+    setIsPreviewPanning(false);
     setDivergenceStyleIds([]);
     setDivergenceReference(undefined);
     setDivergenceReferenceWeight(50);
@@ -163,7 +221,6 @@ export function ImagePreviewModal({
     setDesignDescriptionError("");
     setHasCopiedDescription(false);
     setIsSourceDescriptionExpanded(false);
-    setIsPosterZoomOpen(false);
     setSelectedDivergenceQuadrant(null);
     setIsModelPanelOpen(startModelPanel);
     setModelViews({});
@@ -375,8 +432,6 @@ export function ImagePreviewModal({
   const canCollapseDescription = savedDescription.length > 88;
   const canSelectDivergenceQuadrant =
     metadata?.generationType === "divergence" && !isEditing;
-  const canZoomEcommercePoster =
-    metadata?.generationType === "ecommerce-poster" && !isEditing;
   const selectedDivergenceQuadrantIndex = selectedDivergenceQuadrant
     ? DIVERGENCE_QUADRANTS.indexOf(selectedDivergenceQuadrant)
     : -1;
@@ -1010,6 +1065,17 @@ export function ImagePreviewModal({
               </span>
             </button>
             <button
+              className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => void upscaleCurrentImage()}
+              disabled={isUpscaling || isGeneratingVariant || isEditing || !onUpscale}
+              title="使用 SeedVR2-7B 高清放大 2 倍"
+            >
+              {isUpscaling
+                ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                : <ScanLine className="h-4 w-4" />}
+              <span>{isUpscaling ? "放大中" : "高清放大"}</span>
+            </button>
+            <button
               className="btn-secondary image-preview-action"
               onClick={() => downloadDataUrl(result.imageBase64!, `${result.title}.png`)}
               title="下载"
@@ -1422,18 +1488,36 @@ export function ImagePreviewModal({
         ) : null}
 
         <div className="image-preview-main">
-          <div className="image-preview-canvas-wrap">
+          <div
+            className={`image-preview-canvas-wrap ${previewZoom > 1 ? "zoomed" : ""}`}
+            onWheel={(event) => {
+              if (isEditing) return;
+              event.preventDefault();
+              const nextZoom = Math.min(6, Math.max(1, previewZoom + (event.deltaY < 0 ? 0.25 : -0.25)));
+              setPreviewZoom(nextZoom);
+              if (nextZoom === 1) setPreviewPan({ x: 0, y: 0 });
+            }}
+          >
             <img
               src={result.imageBase64}
               alt={result.title}
-              className={`image-preview-image ${isEditing ? "" : "image-file-draggable"} ${canZoomEcommercePoster ? "ecommerce-poster-zoomable" : ""}`}
-              onClick={() => {
-                if (canZoomEcommercePoster) setIsPosterZoomOpen(true);
+              className={`image-preview-image ${!isEditing && previewZoom === 1 ? "image-file-draggable" : ""} ${!isEditing ? "detail-zoomable" : ""} ${isPreviewPanning ? "panning" : ""}`}
+              style={{
+                transform: `translate3d(${previewPan.x}px, ${previewPan.y}px, 0) scale(${previewZoom})`
               }}
+              onDoubleClick={() => {
+                if (isEditing) return;
+                setPreviewZoom(1);
+                setPreviewPan({ x: 0, y: 0 });
+              }}
+              onPointerDown={startPreviewPan}
+              onPointerMove={movePreviewPan}
+              onPointerUp={stopPreviewPan}
+              onPointerCancel={stopPreviewPan}
               onLoad={(event) => initializeCanvas(event.currentTarget)}
-              draggable={!isEditing}
+              draggable={!isEditing && previewZoom === 1}
               onDragStart={(event) => {
-                if (isEditing) {
+                if (isEditing || previewZoom > 1) {
                   event.preventDefault();
                   return;
                 }
@@ -1610,31 +1694,6 @@ export function ImagePreviewModal({
             </aside>
           </div>
         </div>
-
-        {isPosterZoomOpen && canZoomEcommercePoster ? (
-          <div
-            className="ecommerce-poster-zoom-backdrop"
-            role="dialog"
-            aria-modal="true"
-            aria-label="电商长图放大预览"
-            onClick={() => setIsPosterZoomOpen(false)}
-          >
-            <button
-              type="button"
-              className="btn-secondary ecommerce-poster-zoom-close"
-              onClick={() => setIsPosterZoomOpen(false)}
-              title="关闭放大预览"
-              aria-label="关闭放大预览"
-            >
-              <X className="h-4 w-4" />
-            </button>
-            <img
-              src={result.imageBase64}
-              alt={`${result.title} 放大预览`}
-              onClick={(event) => event.stopPropagation()}
-            />
-          </div>
-        ) : null}
 
         {isEditing ? (
           <div className="local-edit-composer">

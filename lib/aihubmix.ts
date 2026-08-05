@@ -78,6 +78,7 @@ export async function streamChatCompletion(
     model: string;
     messages: ChatMessage[];
     temperature?: number;
+    maxCompletionTokens?: number;
   },
   onDelta: (delta: string) => void
 ) {
@@ -91,6 +92,7 @@ export async function streamChatCompletion(
       model: params.model,
       messages: params.messages,
       temperature: params.temperature ?? 0.7,
+      ...(params.maxCompletionTokens ? { max_completion_tokens: params.maxCompletionTokens } : {}),
       stream: true
     })
   });
@@ -104,6 +106,7 @@ export async function streamChatCompletion(
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let finishReason = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -115,9 +118,15 @@ export async function streamChatCompletion(
       if (!data || data === "[DONE]") continue;
       try {
         const json = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+          choices?: Array<{
+            delta?: { content?: string };
+            message?: { content?: string };
+            finish_reason?: string | null;
+          }>;
         };
-        const delta = json.choices?.[0]?.delta?.content || json.choices?.[0]?.message?.content || "";
+        const choice = json.choices?.[0];
+        const delta = choice?.delta?.content || choice?.message?.content || "";
+        if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
         if (delta) {
           content += delta;
           onDelta(delta);
@@ -130,7 +139,7 @@ export async function streamChatCompletion(
   }
 
   if (!content) throw new Error("接口没有返回有效文本内容。");
-  return content;
+  return { content, finishReason };
 }
 
 const PROMPT_OPTIMIZER_SYSTEM_PROMPT = `你是一名具备多模态理解能力的工业设计提示词架构师。你的任务不是机械扩写，也不是堆砌“高清、4K、科技感、高级感”等词，而是结合用户当前文字与上传图片，生成一段可直接提交给图像生成模型的中文产品设计提示词。
