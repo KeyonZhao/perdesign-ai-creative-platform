@@ -63,11 +63,12 @@ type VentParams = {
 
 type HoleItem =
   | { kind: "circle"; x: number; y: number; size: number; rotation: number }
-  | { kind: "polygon"; x: number; y: number; size: number; rotation: number; points: Array<[number, number]> };
+  | { kind: "polygon"; x: number; y: number; size: number; rotation: number; points: Array<[number, number]> }
+  | { kind: "compound"; x: number; y: number; size: number; rotation: number; contours: Array<Array<[number, number]>> };
 
 type ImportedSvgShape = {
   name: string;
-  points: Array<[number, number]>;
+  contours: Array<Array<[number, number]>>;
 };
 
 type PngMask = {
@@ -204,11 +205,11 @@ export function VentEditor() {
   const pngMaskInputRef = useRef<HTMLInputElement | null>(null);
 
   const panelOutline = useMemo(
-    () => makePanelOutline(params, importedPanelShape?.points),
+    () => makePanelOutline(params, importedPanelShape?.contours[0]),
     [importedPanelShape, params]
   );
   const holes = useMemo(
-    () => createHoles(params, gradientPoint, importedSvgShape?.points, pngMask, maskPosition, maskScale, panelOutline),
+    () => createHoles(params, gradientPoint, importedSvgShape?.contours, pngMask, maskPosition, maskScale, panelOutline),
     [gradientPoint, importedSvgShape, maskPosition, maskScale, panelOutline, params, pngMask]
   );
   const holePreviewPath = useMemo(() => buildHolePreviewPath(holes), [holes]);
@@ -341,8 +342,8 @@ export function VentEditor() {
     if (!file) return;
     setSvgImportError("");
     try {
-      const points = await parseSvgOutline(file, "孔型");
-      setImportedSvgShape({ name: file.name, points });
+      const contours = await parseSvgOutline(file, "孔型", true);
+      setImportedSvgShape({ name: file.name, contours });
       setParams((current) => ({ ...current, holeShape: "svg" }));
     } catch (error) {
       setImportedSvgShape(null);
@@ -366,8 +367,8 @@ export function VentEditor() {
     if (!file) return;
     setPanelSvgImportError("");
     try {
-      const points = await parseSvgOutline(file, "面板轮廓");
-      setImportedPanelShape({ name: file.name, points });
+      const contours = await parseSvgOutline(file, "面板轮廓", false);
+      setImportedPanelShape({ name: file.name, contours });
       setParams((current) => ({ ...current, panelShape: "custom" }));
     } catch (error) {
       setImportedPanelShape(null);
@@ -614,10 +615,10 @@ export function VentEditor() {
                   ) : importedSvgShape ? (
                     <>
                       <strong>{importedSvgShape.name}</strong>
-                      <span>已识别 {importedSvgShape.points.length} 个轮廓点</span>
+                      <span>已识别 {importedSvgShape.contours.length} 个子轮廓，共 {importedSvgShape.contours.reduce((sum, contour) => sum + contour.length, 0)} 个轮廓点</span>
                     </>
                   ) : (
-                    <span>支持 polygon、polyline、path、rect、circle 和 ellipse。</span>
+                    <span>支持多个分离轮廓；整份 SVG 会作为一个复合孔同步缩放、旋转和阵列。</span>
                   )}
                 </div>
                 <NumberField
@@ -714,7 +715,7 @@ export function VentEditor() {
                   ) : importedPanelShape ? (
                     <>
                       <strong>{importedPanelShape.name}</strong>
-                      <span>已识别 {importedPanelShape.points.length} 个轮廓点</span>
+                      <span>已识别 {importedPanelShape.contours[0]?.length || 0} 个轮廓点</span>
                     </>
                   ) : (
                     <span>导入闭合 SVG 线稿作为面板外轮廓。</span>
@@ -1602,7 +1603,7 @@ function estimatePngBackground(pixels: Uint8ClampedArray, width: number, height:
   return [total[0] / count, total[1] / count, total[2] / count] as [number, number, number];
 }
 
-async function parseSvgOutline(file: File, label = "孔型") {
+async function parseSvgOutline(file: File, label = "孔型", allowCompound = false) {
   const source = await file.text();
   const svgDocument = new DOMParser().parseFromString(source, "image/svg+xml");
   if (svgDocument.querySelector("parsererror")) {
@@ -1676,11 +1677,15 @@ async function parseSvgOutline(file: File, label = "孔型") {
     const usableCandidates = candidates.some((candidate) => !candidate.frameLike)
       ? candidates.filter((candidate) => !candidate.frameLike)
       : candidates;
-    const outline = usableCandidates.reduce((largest, current) =>
-      outlineSelectionScore(current.points) > outlineSelectionScore(largest.points) ? current : largest
-    ).points;
-    const normalized = normalizeImportedPoints(outline);
-    if (normalized.length < 3) throw new Error(`识别到的 SVG 轮廓点不足，无法作为${label}。`);
+    const outlines = allowCompound
+      ? usableCandidates.map((candidate) => candidate.points)
+      : [usableCandidates.reduce((largest, current) =>
+          outlineSelectionScore(current.points) > outlineSelectionScore(largest.points) ? current : largest
+        ).points];
+    const normalized = normalizeImportedContours(outlines);
+    if (!normalized.length || normalized.some((contour) => contour.length < 3)) {
+      throw new Error(`识别到的 SVG 轮廓点不足，无法作为${label}。`);
+    }
     return normalized;
   } finally {
     sandbox.remove();
@@ -1804,7 +1809,7 @@ function outlineBounds(points: Array<[number, number]>) {
   };
 }
 
-function normalizeImportedPoints(points: Array<[number, number]>) {
+function cleanImportedContour(points: Array<[number, number]>) {
   const finite = points.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
   const deduplicated = finite.filter(([x, y], index) => {
     if (index === 0) return true;
@@ -1816,10 +1821,15 @@ function normalizeImportedPoints(points: Array<[number, number]>) {
     const [lastX, lastY] = deduplicated[deduplicated.length - 1];
     if (Math.hypot(firstX - lastX, firstY - lastY) < 1e-7) deduplicated.pop();
   }
-  if (deduplicated.length < 3) return [];
+  return deduplicated.length >= 3 ? deduplicated : [];
+}
 
-  const xs = deduplicated.map(([x]) => x);
-  const ys = deduplicated.map(([, y]) => y);
+function normalizeImportedContours(contours: Array<Array<[number, number]>>) {
+  const cleaned = contours.map(cleanImportedContour).filter((contour) => contour.length >= 3);
+  const allPoints = cleaned.flat();
+  if (!allPoints.length) return [];
+  const xs = allPoints.map(([x]) => x);
+  const ys = allPoints.map(([, y]) => y);
   const minimumX = Math.min(...xs);
   const maximumX = Math.max(...xs);
   const minimumY = Math.min(...ys);
@@ -1830,19 +1840,22 @@ function normalizeImportedPoints(points: Array<[number, number]>) {
   if (scale <= 0) return [];
   const centerX = (minimumX + maximumX) / 2;
   const centerY = (minimumY + maximumY) / 2;
-  return deduplicated.map(([x, y]) => [(x - centerX) / scale, (y - centerY) / scale] as [number, number]);
+  return cleaned.map((contour) => contour.map(([x, y]) => [
+    (x - centerX) / scale,
+    (y - centerY) / scale
+  ] as [number, number]));
 }
 
 function createHoles(
   params: VentParams,
   point: { x: number; y: number },
-  svgPoints?: Array<[number, number]>,
+  svgContours?: Array<Array<[number, number]>>,
   pngMask?: PngMask | null,
   maskPosition: NormalizedPoint = { x: 0.5, y: 0.5 },
   maskScale = 1,
   panelOutline = makePanelOutline(params)
 ) {
-  if (params.holeShape === "svg" && !svgPoints?.length) return [];
+  if (params.holeShape === "svg" && !svgContours?.length) return [];
   const candidates = createLayoutCandidates(params);
   const result: HoleItem[] = [];
   const boundaryOutline = params.safe ? makeSafetyOutline(params, panelOutline) : panelOutline;
@@ -1864,7 +1877,7 @@ function createHoles(
     if (pngMask && insideMask && params.maskMode === "smaller") {
       size *= Math.max(0.1, 1 - params.maskStrength / 100 * 0.9);
     }
-    const item = makeHoleItem(rotated.x, rotated.y, size, params, candidate.rotation + degrees(params.layoutRotation), svgPoints);
+    const item = makeHoleItem(rotated.x, rotated.y, size, params, candidate.rotation + degrees(params.layoutRotation), svgContours);
     if (!itemInsideOutline(item, boundaryOutline)) return;
     result.push(item);
   });
@@ -2019,7 +2032,7 @@ function makeHoleItem(
   size: number,
   params: VentParams,
   layoutRotation: number,
-  svgPoints?: Array<[number, number]>
+  svgContours?: Array<Array<[number, number]>>
 ): HoleItem {
   const rotation = degrees(params.holeRotation) + layoutRotation;
   if (params.holeShape === "circle") return { kind: "circle", x, y, size, rotation };
@@ -2032,15 +2045,22 @@ function makeHoleItem(
   } else if (params.holeShape === "star") {
     points = starPoints(x, y, size / 2, size / 2 * params.starInnerRatio / 100, params.starPoints, rotation);
   } else if (params.holeShape === "svg") {
-    points = transformImportedPoints(svgPoints ?? [], x, y, size * params.svgShapeScale, rotation);
+    return {
+      kind: "compound",
+      x,
+      y,
+      size,
+      rotation,
+      contours: transformImportedContours(svgContours ?? [], x, y, size * params.svgShapeScale, rotation)
+    };
   } else {
     points = slotPoints(x, y, size, Math.min(params.holeHeight, size), rotation, 12);
   }
   return { kind: "polygon", x, y, size, rotation, points };
 }
 
-function transformImportedPoints(
-  points: Array<[number, number]>,
+function transformImportedContours(
+  contours: Array<Array<[number, number]>>,
   cx: number,
   cy: number,
   scale: number,
@@ -2048,10 +2068,10 @@ function transformImportedPoints(
 ) {
   const cosine = Math.cos(rotation);
   const sine = Math.sin(rotation);
-  return points.map(([x, y]) => [
+  return contours.map((points) => points.map(([x, y]) => [
     cx + x * scale * cosine - y * scale * sine,
     cy + x * scale * sine + y * scale * cosine
-  ] as [number, number]);
+  ] as [number, number]));
 }
 
 function gradientValue(x: number, y: number, params: VentParams, point: { x: number; y: number }) {
@@ -2168,7 +2188,7 @@ function itemInsideOutline(item: HoleItem, outline: Array<[number, number]>) {
         [item.x, item.y + item.size / 2],
         [item.x, item.y - item.size / 2]
       ] as Array<[number, number]>
-    : item.points;
+    : item.kind === "compound" ? item.contours.flat() : item.points;
   return testPoints.every(([x, y]) => pointInPolygon(x, y, outline));
 }
 
@@ -2246,6 +2266,7 @@ function rotateAroundCenter(x: number, y: number, params: VentParams, rotation: 
 
 function itemArea(item: HoleItem) {
   if (item.kind === "circle") return Math.PI * Math.pow(item.size / 2, 2);
+  if (item.kind === "compound") return item.contours.reduce((sum, contour) => sum + polygonArea(contour), 0);
   return polygonArea(item.points);
 }
 
@@ -2271,8 +2292,11 @@ function buildHolePreviewPath(holes: HoleItem[]) {
         `a${pathNumber(radius)} ${pathNumber(radius)} 0 1 0 ${pathNumber(-radius * 2)} 0`
       ].join(" ");
     }
-    if (!item.points.length) return "";
-    return `M${item.points.map(([x, y]) => `${pathNumber(x)} ${pathNumber(y)}`).join(" L")} Z`;
+    const contours = item.kind === "compound" ? item.contours : [item.points];
+    return contours
+      .filter((contour) => contour.length)
+      .map((contour) => `M${contour.map(([x, y]) => `${pathNumber(x)} ${pathNumber(y)}`).join(" L")} Z`)
+      .join(" ");
   }).join(" ");
 }
 
@@ -2289,6 +2313,8 @@ function buildSvg(params: VentParams, holes: HoleItem[], outline: Array<[number,
   holes.forEach((item) => {
     if (item.kind === "circle") {
       lines.push(`<circle cx="${item.x.toFixed(4)}" cy="${item.y.toFixed(4)}" r="${(item.size / 2).toFixed(4)}"/>`);
+    } else if (item.kind === "compound") {
+      item.contours.forEach((contour) => lines.push(`<polygon points="${pointsAttribute(contour, 4)}"/>`));
     } else {
       lines.push(`<polygon points="${pointsAttribute(item.points, 4)}"/>`);
     }
@@ -2303,6 +2329,8 @@ function buildDxf(params: VentParams, holes: HoleItem[], outline: Array<[number,
   holes.forEach((item) => {
     if (item.kind === "circle") {
       lines.push("0", "CIRCLE", "8", "HOLES", "10", item.x.toFixed(4), "20", (-item.y).toFixed(4), "30", "0", "40", (item.size / 2).toFixed(4));
+    } else if (item.kind === "compound") {
+      item.contours.forEach((contour) => appendPolyline(lines, contour, "HOLES"));
     } else {
       appendPolyline(lines, item.points, "HOLES");
     }
