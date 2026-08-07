@@ -22,7 +22,15 @@ export function getFriendlyAiError(status: number, body?: string) {
       : "当前接口 Key 权限不足，或所请求的能力尚未开通。";
   }
   if (status === 404) return "当前模型不存在或暂不可用，请更换模型。";
-  if (status === 429) return "请求过于频繁或额度不足，请稍后再试。";
+  if (status === 429) {
+    if (/insufficient\s+(?:balance|credit)|balance.*(?:low|insufficient)|余额不足|额度不足/i.test(providerMessage)) {
+      return providerMessage ? `接口账户余额不足：${providerMessage}` : "接口账户余额不足，请充值后重试。";
+    }
+    if (/rate.?limit|too many requests|frequency|concurren|rpm|tpm|请求过于频繁|并发/i.test(providerMessage)) {
+      return providerMessage ? `接口触发频率限制：${providerMessage}` : "接口触发频率限制，请稍后重试。";
+    }
+    return providerMessage ? `接口返回 429：${providerMessage}` : "接口触发频率限制，请稍后重试。";
+  }
   if (status >= 500) return "接口服务暂时不可用，请稍后重试。";
   return providerMessage ? `接口返回错误：${providerMessage}` : "接口请求失败。";
 }

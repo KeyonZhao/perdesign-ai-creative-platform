@@ -42,6 +42,7 @@ export async function callChatCompletion(params: {
   model: string;
   messages: ChatMessage[];
   temperature?: number;
+  maxCompletionTokens?: number;
 }) {
   const response = await fetch(`${resolveBaseUrl(params.baseUrl)}/chat/completions`, {
     method: "POST",
@@ -52,7 +53,8 @@ export async function callChatCompletion(params: {
     body: JSON.stringify({
       model: params.model,
       messages: params.messages,
-      temperature: params.temperature ?? 0.7
+      temperature: params.temperature ?? 0.7,
+      ...(params.maxCompletionTokens ? { max_completion_tokens: params.maxCompletionTokens } : {})
     })
   });
 
@@ -79,6 +81,9 @@ export async function streamChatCompletion(
     messages: ChatMessage[];
     temperature?: number;
     maxCompletionTokens?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    reasoningEffort?: "minimal" | "low" | "medium" | "high";
   },
   onDelta: (delta: string) => void
 ) {
@@ -88,11 +93,15 @@ export async function streamChatCompletion(
       Authorization: `Bearer ${params.apiKey}`,
       "Content-Type": "application/json"
     },
+    signal: params.signal && params.timeoutMs
+      ? AbortSignal.any([params.signal, AbortSignal.timeout(params.timeoutMs)])
+      : params.signal || (params.timeoutMs ? AbortSignal.timeout(params.timeoutMs) : undefined),
     body: JSON.stringify({
       model: params.model,
       messages: params.messages,
       temperature: params.temperature ?? 0.7,
       ...(params.maxCompletionTokens ? { max_completion_tokens: params.maxCompletionTokens } : {}),
+      ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
       stream: true
     })
   });

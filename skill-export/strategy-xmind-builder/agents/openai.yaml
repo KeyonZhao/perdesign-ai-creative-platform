@@ -1,0 +1,4 @@
+interface:
+  display_name: "战略 XMind 构建器"
+  short_description: "把长篇策划案重构为高质量、可编辑的战略 XMind 导图"
+  default_prompt: "使用 $strategy-xmind-builder 阅读我上传的策划案，并输出经过逻辑校验的可编辑 XMind 导图。"

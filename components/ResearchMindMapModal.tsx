@@ -1,6 +1,7 @@
 "use client";
 
 import { Download, Loader2, Maximize2, Minus, Plus, RefreshCw, X } from "lucide-react";
+import JSZip from "jszip";
 import {
   useEffect,
   useMemo,
@@ -16,13 +17,19 @@ export type MindMapRevisionRequest = {
   changes: string[];
 };
 
-type TreeNode = {
+export type MindMapTreeData = {
   id: string;
   label: string;
-  children: TreeNode[];
+  detail?: string;
+  tag?: string;
+  children: MindMapTreeData[];
   detached?: boolean;
   position?: { x: number; y: number };
+  width?: number;
+  side?: "left" | "right";
 };
+
+type TreeNode = MindMapTreeData;
 
 type LayoutNode = TreeNode & {
   depth: number;
@@ -34,6 +41,7 @@ type LayoutNode = TreeNode & {
 type DropIntent = {
   targetId: string;
   mode: "before" | "after" | "child";
+  side?: "left" | "right";
 };
 
 const ROOT_NODE_WIDTH = 286;
@@ -41,11 +49,15 @@ const ROOT_NODE_HEIGHT = 82;
 const COLUMN_GAP = 104;
 const ROW_GAP = 28;
 
-function getNodeSize(depth: number) {
+function getNodeSize(depth: number, customWidth?: number) {
   return {
-    width: Math.max(190, ROOT_NODE_WIDTH - depth * 24),
+    width: customWidth == null ? Math.max(190, ROOT_NODE_WIDTH - depth * 24) : Math.max(120, Math.min(520, customWidth)),
     height: Math.max(58, ROOT_NODE_HEIGHT - depth * 7)
   };
+}
+
+function getNodeAnchorY(depth: number, height: number) {
+  return depth >= 3 ? height - 8 : height / 2;
 }
 
 function getDepthX(depth: number) {
@@ -58,20 +70,36 @@ function getDepthX(depth: number) {
 
 export function ResearchMindMapModal({
   content,
+  initialTree,
+  embedded = false,
+  canRevise = true,
+  title = "策划案思维导图",
+  centerInitialView = false,
+  onTreeChange,
   onClose,
   onRequestRevision
 }: {
   content: string;
+  initialTree?: MindMapTreeData | null;
+  embedded?: boolean;
+  canRevise?: boolean;
+  title?: string;
+  centerInitialView?: boolean;
+  onTreeChange?: (tree: MindMapTreeData) => void;
   onClose: () => void;
   onRequestRevision: (request: MindMapRevisionRequest) => Promise<void>;
 }) {
-  const originalTree = useMemo(() => buildMindMapTree(content), [content]);
+  const originalTree = useMemo(
+    () => initialTree ? cloneTree(initialTree) : buildMindMapTree(content),
+    [content, initialTree]
+  );
   const originalTreeRef = useRef<TreeNode>(cloneTree(originalTree));
   const [tree, setTree] = useState<TreeNode>(() => cloneTree(originalTree));
   const baseMap = useMemo(() => layoutTree(tree), [tree]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const canvasDragRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const nodeDragRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const nodeResizeRef = useRef<{ id: string; startX: number; startWidth: number; direction: 1 | -1 } | null>(null);
   const nextNodeIdRef = useRef(1);
   const undoHistoryRef = useRef<TreeNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -82,6 +110,13 @@ export function ResearchMindMapModal({
   const [scale, setScale] = useState(0.88);
   const [pan, setPan] = useState({ x: 56, y: 48 });
   const [isApplying, setIsApplying] = useState(false);
+  const onTreeChangeRef = useRef(onTreeChange);
+  onTreeChangeRef.current = onTreeChange;
+
+  useEffect(() => {
+    onTreeChangeRef.current?.(cloneTree(tree));
+  }, [tree]);
+
   const previewTree = useMemo(() => {
     if (!draggingId || !dropIntent) return tree;
     const draft = cloneTree(tree);
@@ -90,6 +125,22 @@ export function ResearchMindMapModal({
   }, [draggingId, dropIntent, tree]);
   const map = useMemo(() => layoutTree(previewTree), [previewTree]);
   const changes = useMemo(() => compareTrees(originalTreeRef.current, tree), [tree]);
+
+  useEffect(() => {
+    if (!centerInitialView) return;
+    const frame = window.requestAnimationFrame(() => {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const nextScale = Math.max(0.38, Math.min(1.15, (rect.width - 120) / map.width, (rect.height - 120) / map.height));
+      setScale(nextScale);
+      setPan({
+        x: Math.max(44, (rect.width - map.width * nextScale) / 2),
+        y: Math.max(44, (rect.height - map.height * nextScale) / 2)
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [centerInitialView, map.height, map.width]);
 
   const setZoom = (nextScale: number) => setScale(Math.max(0.38, Math.min(1.8, nextScale)));
 
@@ -215,6 +266,17 @@ export function ResearchMindMapModal({
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const resize = nodeResizeRef.current;
+    if (resize) {
+      const width = Math.max(120, Math.min(520, resize.startWidth + ((event.clientX - resize.startX) / scale) * resize.direction));
+      setTree((current) => {
+        const draft = cloneTree(current);
+        const target = findNode(draft, resize.id);
+        if (target) target.width = Math.round(width);
+        return draft;
+      });
+      return;
+    }
     const nodeDrag = nodeDragRef.current;
     if (nodeDrag) {
       const offset = {
@@ -222,6 +284,10 @@ export function ResearchMindMapModal({
         y: (event.clientY - nodeDrag.y) / scale
       };
       setDragOffset(offset);
+      if (nodeDrag.id === tree.id) {
+        setDropIntent(null);
+        return;
+      }
       const rect = event.currentTarget.getBoundingClientRect();
       const localX = (event.clientX - rect.left - pan.x) / scale;
       const localY = (event.clientY - rect.top - pan.y) / scale;
@@ -241,10 +307,24 @@ export function ResearchMindMapModal({
   }
 
   function finishPointerInteraction() {
+    if (nodeResizeRef.current) {
+      nodeResizeRef.current = null;
+      return;
+    }
     const nodeDrag = nodeDragRef.current;
-    if (nodeDrag && dropIntent) {
+    if (nodeDrag?.id === tree.id && Math.hypot(dragOffset.x, dragOffset.y) > 2) {
+      const sourceNode = baseMap.nodes.find((node) => node.id === tree.id);
+      if (sourceNode) {
+        mutateTree((draft) => {
+          draft.position = {
+            x: Math.max(0, sourceNode.x + dragOffset.x),
+            y: Math.max(0, sourceNode.y + dragOffset.y)
+          };
+        });
+      }
+    } else if (nodeDrag && dropIntent) {
       moveNode(nodeDrag.id, dropIntent);
-    } else if (nodeDrag && Math.hypot(dragOffset.x, dragOffset.y) > 36) {
+    } else if (nodeDrag && Math.hypot(dragOffset.x, dragOffset.y) > 110) {
       const sourceNode = baseMap.nodes.find((node) => node.id === nodeDrag.id);
       if (sourceNode) {
         detachNode(nodeDrag.id, {
@@ -306,13 +386,63 @@ export function ResearchMindMapModal({
     image.src = objectUrl;
   }
 
+  async function exportXMind() {
+    const zip = new JSZip();
+    const sheetId = `sheet-${Date.now()}`;
+    let topicIndex = 0;
+    const toTopic = (node: TreeNode): Record<string, unknown> => {
+      const topic: Record<string, unknown> = {
+        id: `topic-${topicIndex++}`,
+        class: "topic",
+        title: node.label || "未命名节点"
+      };
+      if (node.detail) topic.notes = { plain: { content: node.detail } };
+      if (node.tag) topic.labels = [node.tag];
+      if (node.children.length) {
+        topic.children = { attached: node.children.map(toTopic) };
+      }
+      return topic;
+    };
+    const rootTopic = toTopic(tree);
+    rootTopic.structureClass = "org.xmind.ui.logic.right";
+    const content = [{
+      id: sheetId,
+      class: "sheet",
+      title: title || tree.label || "思维导图",
+      rootTopic
+    }];
+    zip.file("content.json", JSON.stringify(content));
+    zip.file("metadata.json", JSON.stringify({
+      creator: { name: "Perdesign AI", version: "1.0.4" },
+      activeSheetId: sheetId
+    }));
+    zip.file("manifest.json", JSON.stringify({
+      "file-entries": {
+        "content.json": {},
+        "metadata.json": {}
+      }
+    }));
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/vnd.xmind.workbook" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${sanitizeXMindFilename(title || tree.label || "思维导图")}.xmind`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   return (
-    <div className="research-mindmap-backdrop" role="dialog" aria-modal="true" aria-label="策划案思维导图">
+    <div
+      className={`research-mindmap-backdrop ${embedded ? "embedded" : ""}`}
+      role={embedded ? "region" : "dialog"}
+      aria-modal={embedded ? undefined : true}
+      aria-label="策划案思维导图"
+    >
       <div className="research-mindmap-modal">
         <header className="research-mindmap-header">
           <div>
-            <strong>策划案思维导图</strong>
-            <span>双击编辑 · 拖拽调整层级与顺序 · Ctrl/⌘ + Z 撤销 · Tab 添加子节点 · Enter 添加同级 · Del 删除</span>
+            <strong>{title}</strong>
+            <span>双击编辑 · 选中后拖拽端点调节宽度 · 拖拽调整层级与顺序 · Ctrl/⌘ + Z 撤销 · Tab 添加子节点 · Enter 添加同级 · Del 删除</span>
           </div>
           <div className="research-mindmap-actions">
             <button type="button" onClick={() => setZoom(scale - 0.12)} title="缩小"><Minus className="h-4 w-4" /></button>
@@ -320,17 +450,22 @@ export function ResearchMindMapModal({
             <button type="button" onClick={() => setZoom(scale + 0.12)} title="放大"><Plus className="h-4 w-4" /></button>
             <button type="button" onClick={fitView} title="适配视图"><Maximize2 className="h-4 w-4" /></button>
             <button type="button" onClick={() => void exportPng()} title="导出 PNG"><Download className="h-4 w-4" /></button>
-            <button
-              type="button"
-              className="research-mindmap-revise"
-              onClick={() => void applyRevision()}
-              disabled={!changes.length || isApplying}
-              title="根据导图修改策划案"
-            >
-              {isApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              <span>{isApplying ? "修改中" : `修改策划案${changes.length ? ` (${changes.length})` : ""}`}</span>
+            <button type="button" onClick={() => void exportXMind()} title="导出 XMind" aria-label="导出 XMind">
+              <span className="research-mindmap-xmind-label">XM</span>
             </button>
-            <button type="button" onClick={onClose} title="关闭"><X className="h-4 w-4" /></button>
+            {canRevise ? (
+              <button
+                type="button"
+                className="research-mindmap-revise"
+                onClick={() => void applyRevision()}
+                disabled={!changes.length || isApplying}
+                title="根据导图修改策划案"
+              >
+                {isApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                <span>{isApplying ? "修改中" : `修改策划案${changes.length ? ` (${changes.length})` : ""}`}</span>
+              </button>
+            ) : null}
+            {!embedded ? <button type="button" onClick={onClose} title="关闭"><X className="h-4 w-4" /></button> : null}
           </div>
         </header>
 
@@ -384,7 +519,7 @@ export function ResearchMindMapModal({
               {draggingId && dropIntent ? (() => {
                 const placeholder = map.nodes.find((node) => node.id === draggingId);
                 if (!placeholder) return null;
-                const size = getNodeSize(placeholder.depth);
+                const size = getNodeSize(placeholder.depth, placeholder.width);
                 return (
                   <rect
                     x={placeholder.x}
@@ -434,6 +569,17 @@ export function ResearchMindMapModal({
                   }}
                   onFinishEditing={() => setEditingId(null)}
                   onAdd={() => addChild(node.id)}
+                  onResizeStart={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    undoHistoryRef.current.push(cloneTree(tree));
+                    nodeResizeRef.current = {
+                      id: node.id,
+                      startX: event.clientX,
+                      startWidth: getNodeSize(node.depth, node.width).width,
+                      direction: node.side === "left" ? -1 : 1
+                    };
+                  }}
                   onDragStart={(event) => {
                     event.stopPropagation();
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -465,6 +611,7 @@ function NodeView({
   onLabelChange,
   onFinishEditing,
   onAdd,
+  onResizeStart,
   onDragStart
 }: {
   node: LayoutNode;
@@ -478,10 +625,14 @@ function NodeView({
   onLabelChange: (label: string) => void;
   onFinishEditing: () => void;
   onAdd: () => void;
+  onResizeStart: (event: ReactPointerEvent<SVGGElement>) => void;
   onDragStart: (event: ReactPointerEvent<SVGGElement>) => void;
 }) {
-  const size = getNodeSize(node.depth);
-  const lines = wrapLabel(node.label || "未命名节点", node.depth === 0 ? 16 : Math.max(15, 21 - node.depth), 3);
+  const size = getNodeSize(node.depth, node.width);
+  const isLineNode = node.depth >= 3;
+  const lineY = size.height - 8;
+  const textX = node.side === "left" ? size.width - 8 : 8;
+  const lines = wrapLabel(node.label || "未命名节点", Math.max(8, Math.floor((size.width - 24) / 12)), 3);
   return (
     <g
       style={{
@@ -497,24 +648,30 @@ function NodeView({
         event.stopPropagation();
         onEdit();
       }}
-      className="research-mindmap-node"
+      className={`research-mindmap-node ${isLineNode ? "is-line-node" : ""} ${node.side === "left" ? "is-left-branch" : ""}`}
     >
-      <rect
-        width={size.width}
-        height={size.height}
-        rx={node.depth === 0 ? 18 : Math.max(10, 15 - node.depth)}
-        fill={
-          node.depth === 0
-            ? "#6652e8"
-            : node.depth === 1
-              ? "#302b45"
-              : node.depth === 2
-                ? "#25242c"
-                : "#1e1e22"
-        }
-        stroke={dropMode === "child" ? "rgba(168,156,255,.55)" : selected ? "#8f7bff" : "rgba(255,255,255,.11)"}
-        strokeWidth={dropMode === "child" || selected ? 2 : 1}
-      />
+      {isLineNode ? (
+        <>
+          <rect width={size.width} height={size.height} fill="transparent" />
+          <line
+            x1="0"
+            y1={lineY}
+            x2={size.width}
+            y2={lineY}
+            stroke={dropMode === "child" ? "rgba(168,156,255,.58)" : selected ? "#8f7bff" : "rgba(168,156,255,.34)"}
+            strokeWidth={dropMode === "child" || selected ? 2 : 1.35}
+          />
+        </>
+      ) : (
+        <rect
+          width={size.width}
+          height={size.height}
+          rx={node.depth === 0 ? 18 : 14}
+          fill={node.depth === 0 ? "#6652e8" : node.depth === 1 ? "#302b45" : "#25242c"}
+          stroke={dropMode === "child" ? "rgba(168,156,255,.55)" : selected ? "#8f7bff" : "rgba(255,255,255,.11)"}
+          strokeWidth={dropMode === "child" || selected ? 2 : 1}
+        />
+      )}
       {editing ? (
         <foreignObject x="0" y="0" width={size.width} height={size.height}>
           <input
@@ -538,22 +695,33 @@ function NodeView({
         </foreignObject>
       ) : (
         <text
-          x={size.width / 2}
-          y={size.height / 2 - ((lines.length - 1) * 9)}
-          textAnchor="middle"
+          x={isLineNode ? textX : size.width / 2}
+          y={isLineNode ? lineY - 12 - ((lines.length - 1) * 17) : size.height / 2 - ((lines.length - 1) * 9)}
+          textAnchor={isLineNode ? (node.side === "left" ? "end" : "start") : "middle"}
           dominantBaseline="middle"
           fill="#f7f7f8"
           fontFamily="ui-sans-serif,system-ui,sans-serif"
           fontSize={node.depth === 0 ? 14 : node.depth === 1 ? 12.5 : 11.5}
-          fontWeight={node.depth === 0 ? 700 : 550}
+          fontWeight={node.depth === 0 ? 700 : node.depth === 1 ? 600 : 500}
           pointerEvents="none"
         >
-          {lines.map((line, index) => <tspan key={`${line}-${index}`} x={size.width / 2} dy={index ? 17 : 0}>{line}</tspan>)}
+          {lines.map((line, index) => <tspan key={`${line}-${index}`} x={isLineNode ? textX : size.width / 2} dy={index ? 17 : 0}>{line}</tspan>)}
         </text>
       )}
       {selected ? (
         <g
-          transform={`translate(${size.width + 13} ${size.height / 2})`}
+          transform={`translate(${node.side === "left" ? 0 : size.width} ${isLineNode ? lineY : size.height / 2})`}
+          className="research-mindmap-node-resize"
+          onPointerDown={onResizeStart}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <circle r="8" fill="#17171b" stroke="#8f7bff" strokeWidth="1.5" />
+          <path d="M -2.5 -3 V 3 M 2.5 -3 V 3" stroke="#cfc7ff" strokeWidth="1.2" />
+        </g>
+      ) : null}
+      {selected ? (
+        <g
+          transform={`translate(${node.side === "left" ? -13 : size.width + 13} ${getNodeAnchorY(node.depth, size.height)})`}
           className="research-mindmap-node-add"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
@@ -630,10 +798,46 @@ function buildMindMapTree(content: string) {
 
 function layoutTree(root: TreeNode) {
   const detachedRoots = root.children.filter((child) => child.detached);
-  const mainRoot = { ...root, children: root.children.filter((child) => !child.detached) };
-  const main = layoutTreeComponent(mainRoot);
-  const nodes = [...main.nodes];
-  const edges = [...main.edges];
+  const attachedChildren = root.children.filter((child) => !child.detached);
+  const rightChildren = attachedChildren.filter((child) => child.side !== "left");
+  const leftChildren = attachedChildren.filter((child) => child.side === "left");
+  const right = layoutTreeComponent({ ...root, children: rightChildren });
+  const leftRaw = layoutTreeComponent({ ...root, children: leftChildren });
+  const rootWidth = getNodeSize(0, root.width).width;
+  const left = {
+    ...leftRaw,
+    nodes: leftRaw.nodes.map((node) => {
+      const width = getNodeSize(node.depth, node.width).width;
+      return { ...node, x: rootWidth - node.x - width, ...(node.id === root.id ? {} : { side: "left" as const }) };
+    }),
+    edges: leftRaw.edges.map((edge) => ({ ...edge, id: `left-${edge.id}`, path: mirrorEdgePath(edge.path, rootWidth) }))
+  };
+  const rightRoot = right.nodes.find((node) => node.id === root.id)!;
+  const leftRoot = left.nodes.find((node) => node.id === root.id)!;
+  const rootY = Math.max(rightRoot.y, leftRoot.y);
+  const rightDy = rootY - rightRoot.y;
+  const leftDy = rootY - leftRoot.y;
+  const combinedNodes = [
+    ...right.nodes.map((node) => ({ ...node, y: node.y + rightDy })),
+    ...left.nodes.filter((node) => node.id !== root.id).map((node) => ({ ...node, y: node.y + leftDy }))
+  ];
+  const combinedEdges = [
+    ...right.edges.map((edge) => ({ ...edge, path: translateEdgePath(edge.path, 0, rightDy) })),
+    ...left.edges.map((edge) => ({ ...edge, path: translateEdgePath(edge.path, 0, leftDy) }))
+  ];
+  const minX = Math.min(0, ...combinedNodes.map((node) => node.x));
+  const mainShiftX = -minX;
+  const main = {
+    nodes: combinedNodes.map((node) => ({ ...node, x: node.x + mainShiftX })),
+    edges: combinedEdges.map((edge) => ({ ...edge, path: translateEdgePath(edge.path, mainShiftX, 0) })),
+    width: 0,
+    height: Math.max(right.height + rightDy, left.height + leftDy)
+  };
+  const mainRootNode = main.nodes.find((node) => node.id === root.id);
+  const mainDx = root.position && mainRootNode ? root.position.x - mainRootNode.x : 0;
+  const mainDy = root.position && mainRootNode ? root.position.y - mainRootNode.y : 0;
+  const nodes = main.nodes.map((node) => ({ ...node, x: node.x + mainDx, y: node.y + mainDy }));
+  const edges = main.edges.map((edge) => ({ ...edge, path: translateEdgePath(edge.path, mainDx, mainDy) }));
 
   detachedRoots.forEach((detachedRoot) => {
     const component = layoutTreeComponent({ ...detachedRoot, detached: false }, 1);
@@ -658,16 +862,35 @@ function layoutTree(root: TreeNode) {
   return {
     nodes,
     edges,
-    width: Math.max(...nodes.map((node) => node.x + getNodeSize(node.depth).width), ROOT_NODE_WIDTH) + 28,
+    width: Math.max(...nodes.map((node) => node.x + getNodeSize(node.depth, node.width).width), ROOT_NODE_WIDTH) + 28,
     height: Math.max(...nodes.map((node) => node.y + getNodeSize(node.depth).height), ROOT_NODE_HEIGHT) + 28
   };
+}
+
+function mirrorEdgePath(path: string, axisX: number) {
+  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
+  if (!values || values.length !== 8) return path;
+  return `M ${axisX - values[0]} ${values[1]} C ${axisX - values[2]} ${values[3]}, ${axisX - values[4]} ${values[5]}, ${axisX - values[6]} ${values[7]}`;
 }
 
 function layoutTreeComponent(root: TreeNode, startDepth = 0) {
   const nodes: LayoutNode[] = [];
   let nextY = 0;
+  const columnWidths = new Map<number, number>();
+  const collectWidths = (node: TreeNode, depth: number) => {
+    columnWidths.set(depth, Math.max(columnWidths.get(depth) || 0, getNodeSize(depth, node.width).width));
+    node.children.forEach((child) => collectWidths(child, depth + 1));
+  };
+  collectWidths(root, startDepth);
+  const depthX = (depth: number) => {
+    let x = 0;
+    for (let currentDepth = 0; currentDepth < depth; currentDepth += 1) {
+      x += (columnWidths.get(currentDepth) || getNodeSize(currentDepth).width) + COLUMN_GAP;
+    }
+    return x;
+  };
   const position = (node: TreeNode, depth: number, parentId: string | null): LayoutNode => {
-    const size = getNodeSize(depth);
+    const size = getNodeSize(depth, node.width);
     const children = node.children.map((child) => position(child, depth + 1, node.id));
     const y = children.length
       ? (
@@ -681,7 +904,7 @@ function layoutTreeComponent(root: TreeNode, startDepth = 0) {
           nextY += size.height + ROW_GAP;
           return value;
         })();
-    const layoutNode: LayoutNode = { ...node, children: node.children, depth, parentId, x: getDepthX(depth), y };
+    const layoutNode: LayoutNode = { ...node, children: node.children, depth, parentId, x: depthX(depth), y };
     nodes.push(layoutNode);
     return layoutNode;
   };
@@ -690,12 +913,12 @@ function layoutTreeComponent(root: TreeNode, startDepth = 0) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const edges = nodes.flatMap((parent) => parent.children.map((childRef) => {
     const child = byId.get(childRef.id)!;
-    const parentSize = getNodeSize(parent.depth);
-    const childSize = getNodeSize(child.depth);
+    const parentSize = getNodeSize(parent.depth, parent.width);
+    const childSize = getNodeSize(child.depth, child.width);
     const startX = parent.x + parentSize.width;
-    const startY = parent.y + parentSize.height / 2;
+    const startY = parent.y + getNodeAnchorY(parent.depth, parentSize.height);
     const endX = child.x;
-    const endY = child.y + childSize.height / 2;
+    const endY = child.y + getNodeAnchorY(child.depth, childSize.height);
     const bend = startX + (endX - startX) * 0.5;
     return {
       id: `${parent.id}-${child.id}`,
@@ -707,7 +930,7 @@ function layoutTreeComponent(root: TreeNode, startDepth = 0) {
   return {
     nodes,
     edges,
-    width: Math.max(...nodes.map((node) => node.x + getNodeSize(node.depth).width)) + 28,
+    width: Math.max(...nodes.map((node) => node.x + getNodeSize(node.depth, node.width).width)) + 28,
     height: Math.max(ROOT_NODE_HEIGHT, nextY - ROW_GAP)
   };
 }
@@ -736,11 +959,12 @@ function inferDropIntent({
   const candidates = map.nodes
     .filter((node) => node.id !== draggedId && !isDescendant(tree, draggedId, node.id))
     .map((node) => {
-      const size = getNodeSize(node.depth);
-      const left = node.x - 88;
-      const right = node.x + size.width + 112;
-      const top = node.y - 52;
-      const bottom = node.y + size.height + 52;
+      const size = getNodeSize(node.depth, node.width);
+      const rootTarget = node.id === tree.id;
+      const left = node.x - (rootTarget ? 220 : 88);
+      const right = node.x + size.width + (rootTarget ? 220 : 112);
+      const top = node.y - (rootTarget ? 220 : 52);
+      const bottom = node.y + size.height + (rootTarget ? 220 : 52);
       if (x < left || x > right || y < top || y > bottom) return null;
       const dx = x < node.x ? node.x - x : x > node.x + size.width ? x - node.x - size.width : 0;
       const dy = y < node.y ? node.y - y : y > node.y + size.height ? y - node.y - size.height : 0;
@@ -753,12 +977,20 @@ function inferDropIntent({
   const candidate = candidates[0];
   if (!candidate) return null;
   const { node, size } = candidate;
-  if (node.id === tree.id) return { targetId: node.id, mode: "child" };
+  if (node.id === tree.id) {
+    return {
+      targetId: node.id,
+      mode: "child",
+      side: x < node.x + size.width / 2 ? "left" : "right"
+    };
+  }
 
-  const childSnapStart = node.x + size.width * 0.72;
-  if (x >= childSnapStart) return { targetId: node.id, mode: "child" };
+  const inChildZone = node.side === "left"
+    ? x <= node.x + size.width * 0.28
+    : x >= node.x + size.width * 0.72;
+  if (inChildZone) return { targetId: node.id, mode: "child" };
 
-  const centerY = node.y + size.height / 2;
+  const centerY = node.y + getNodeAnchorY(node.depth, size.height);
   if (
     current?.targetId === node.id &&
     (current.mode === "before" || current.mode === "after") &&
@@ -836,7 +1068,7 @@ function collectDetachedNodeIds(root: TreeNode) {
 }
 
 function moveNodeInTree(root: TreeNode, nodeId: string, intent: DropIntent) {
-  const { targetId, mode } = intent;
+  const { targetId, mode, side } = intent;
   if (nodeId === root.id || nodeId === targetId) return;
   const movingNode = findNode(root, nodeId);
   if (!movingNode || findNode(movingNode, targetId)) return;
@@ -850,6 +1082,8 @@ function moveNodeInTree(root: TreeNode, nodeId: string, intent: DropIntent) {
   delete removed.position;
 
   if (mode === "child" || target.id === root.id) {
+    if (target.id === root.id) removed.side = side || "right";
+    else delete removed.side;
     target.children.push(removed);
     return;
   }
@@ -859,6 +1093,8 @@ function moveNodeInTree(root: TreeNode, nodeId: string, intent: DropIntent) {
     return;
   }
   const targetIndex = targetParent.children.findIndex((child) => child.id === targetId);
+  if (targetParent.id === root.id) removed.side = target.side || "right";
+  else delete removed.side;
   targetParent.children.splice(targetIndex + (mode === "after" ? 1 : 0), 0, removed);
 }
 
@@ -917,13 +1153,22 @@ function wrapLabel(label: string, maxCharacters: number, maxLines = 3) {
   return result.length ? result : [""];
 }
 
+function sanitizeXMindFilename(value: string) {
+  const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").trim();
+  return (cleaned || "思维导图").slice(0, 60);
+}
+
 function renderExportSvg(map: ReturnType<typeof layoutTree>, width: number, height: number, padding: number) {
   const edges = map.edges.map((edge) => `<path d="${edge.path}" fill="none" stroke="#5f577e" stroke-width="1.5"/>`).join("");
   const nodes = map.nodes.map((node) => {
-    const size = getNodeSize(node.depth);
-    const lines = wrapLabel(node.label, node.depth === 0 ? 16 : Math.max(15, 21 - node.depth), 3);
+    const size = getNodeSize(node.depth, node.width);
+    const lines = wrapLabel(node.label, Math.max(8, Math.floor((size.width - 24) / 12)), 3);
     const text = lines.map((line, index) => `<tspan x="${size.width / 2}" dy="${index ? 17 : 0}">${escapeXml(line)}</tspan>`).join("");
-    const fill = node.depth === 0 ? "#6652e8" : node.depth === 1 ? "#302b45" : node.depth === 2 ? "#25242c" : "#1e1e22";
+    if (node.depth >= 3) {
+      const lineY = size.height - 8;
+      return `<g transform="translate(${node.x} ${node.y})"><line x1="0" y1="${lineY}" x2="${size.width}" y2="${lineY}" stroke="#756a9f" stroke-width="1.35"/><text x="${size.width / 2}" y="${lineY - 12 - ((lines.length - 1) * 17)}" text-anchor="middle" dominant-baseline="middle" fill="#f4f4f5" font-family="Arial,sans-serif" font-size="12" font-weight="500">${text}</text></g>`;
+    }
+    const fill = node.depth === 0 ? "#6652e8" : node.depth === 1 ? "#302b45" : "#25242c";
     return `<g transform="translate(${node.x} ${node.y})"><rect width="${size.width}" height="${size.height}" rx="14" fill="${fill}" stroke="#45434b"/><text x="${size.width / 2}" y="${size.height / 2 - ((lines.length - 1) * 9)}" text-anchor="middle" dominant-baseline="middle" fill="#f4f4f5" font-family="Arial,sans-serif" font-size="12" font-weight="600">${text}</text></g>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#121214"/><g transform="translate(${padding} ${padding})">${edges}${nodes}</g></svg>`;

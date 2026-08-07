@@ -9,6 +9,7 @@ import {
   Download,
   FileDown,
   Grid3X3,
+  Loader2,
   Mic,
   MessageSquareText,
   Network,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react";
 import { ControlPanel } from "@/components/ControlPanel";
 import { Gallery } from "@/components/Gallery";
-import { ResearchMindMapModal, type MindMapRevisionRequest } from "@/components/ResearchMindMapModal";
+import { ResearchMindMapModal, type MindMapRevisionRequest, type MindMapTreeData } from "@/components/ResearchMindMapModal";
 import { Toast } from "@/components/Toast";
 import { VentEditor } from "@/components/VentEditor";
 import {
@@ -87,10 +88,24 @@ const PRESET_CHAT_API_KEY = "server-managed";
 const PRESET_IMAGE_API_KEY = "server-managed";
 const MAX_IMAGE_GENERATION_CONCURRENCY = 20;
 const RESEARCH_HISTORY_STORAGE_KEY = "perdesign-research-history-v1";
+const MIND_MAP_HISTORY_STORAGE_KEY = "perdesign-mindmap-history-v1";
+const researchScrollPositions = new Map<string, number>();
 const RESEARCH_WELCOME_MESSAGE =
   "你好，我是品物 AI 策划师。你可以从项目想法、现有问题或希望达成的目标开始说起。";
 
-type WorkspaceSection = "research" | "design" | "vent" | "api";
+type WorkspaceSection = "research" | "design" | "vent" | "mindmap" | "api";
+type ActiveMindMap = {
+  message: ResearchMessage;
+  tree: MindMapTreeData;
+};
+type MindMapSession = ActiveMindMap & {
+  id: string;
+  title: string;
+  updatedAt: number;
+  canRevise: boolean;
+  analysisMode?: "ai";
+  analysisVersion?: string;
+};
 type ResearchFile = {
   name: string;
   size: number;
@@ -192,6 +207,13 @@ export default function Home() {
   const [researchSessions, setResearchSessions] = useState<ResearchSession[]>([]);
   const [activeResearchSessionId, setActiveResearchSessionId] = useState("");
   const [isResearchHistoryReady, setIsResearchHistoryReady] = useState(false);
+  const [activeMindMap, setActiveMindMap] = useState<ActiveMindMap | null>(null);
+  const [isImportingMindMap, setIsImportingMindMap] = useState(false);
+  const [isGeneratingMindMap, setIsGeneratingMindMap] = useState(false);
+  const mindMapGenerationLockRef = useRef(false);
+  const [mindMapGenerationError, setMindMapGenerationError] = useState("");
+  const [mindMapSessions, setMindMapSessions] = useState<MindMapSession[]>([]);
+  const [activeMindMapSessionId, setActiveMindMapSessionId] = useState("");
   const isAuthorized = normalizeAuthCode(authCode) === AUTH_CODE;
   const hasChatConfig = isAuthorized;
   const canGenerate = Boolean(
@@ -205,6 +227,26 @@ export default function Home() {
     setAuthDraft(authCode);
     setAuthModalValue(authCode);
   }, [authCode]);
+
+  useEffect(() => {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(MIND_MAP_HISTORY_STORAGE_KEY) || "[]") as MindMapSession[];
+      if (Array.isArray(parsed) && parsed.length) {
+        const sorted = [...parsed].sort((a, b) => b.updatedAt - a.updatedAt);
+        setMindMapSessions(sorted);
+        setActiveMindMapSessionId(sorted[0].id);
+        setActiveMindMap({ message: sorted[0].message, tree: sorted[0].tree });
+        return;
+      }
+    } catch {
+      // 本地导图历史损坏时以空白导图重新开始。
+    }
+    const blank = createBlankMindMapSession();
+    setMindMapSessions([blank]);
+    setActiveMindMapSessionId(blank.id);
+    setActiveMindMap({ message: blank.message, tree: blank.tree });
+    persistMindMapSessions([blank]);
+  }, []);
 
   useEffect(() => {
     if (isAuthorized) {
@@ -1808,6 +1850,199 @@ export default function Home() {
     }
   }
 
+  async function generateResearchMindMap(content: string) {
+    const {
+      chatApiKey: resolvedChatApiKey,
+      chatApiBaseUrl: resolvedChatApiBaseUrl,
+      unlocked
+    } = getResolvedConfig(false);
+    if (!unlocked || !resolvedChatApiKey || !resolvedChatApiBaseUrl) {
+      const message = "当前认证信息不可用，请重新输入认证码。";
+      pushToast("error", message);
+      throw new Error(message);
+    }
+    try {
+      const response = await fetch("/api/research-mindmap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(180_000),
+        body: JSON.stringify({
+          apiKey: resolvedChatApiKey,
+          baseUrl: resolvedChatApiBaseUrl,
+          model: BRAIN_MODEL,
+          content
+        })
+      });
+      const payload = await readApiResponse<{
+        tree?: MindMapTreeData;
+        nodeCount?: number;
+        quality?: { score?: number; depth?: number; stageOutputs?: number };
+        fallback?: boolean;
+        warning?: string;
+        analysisMode?: "ai";
+        analysisVersion?: string;
+        error?: string;
+      }>(response);
+      if (!response.ok || !payload.tree || payload.analysisMode !== "ai" || payload.analysisVersion !== "argument-v2") {
+        throw new Error(payload.error || "策划案导图没有获得完整的大模型分析结果。");
+      }
+      pushToast(
+        payload.fallback ? "info" : "success",
+        payload.warning || `战略导图已完成逻辑重构与质量验收，共 ${payload.nodeCount || "多"} 个有效节点${payload.quality?.score ? `，结构评分 ${payload.quality.score} 分` : ""}。`
+      );
+      return payload.tree;
+    } catch (error) {
+      const message = error instanceof Error && error.name === "TimeoutError"
+        ? "导图分析超过 3 分钟，任务已停止且不会继续发起新的模型请求，请重新生成。"
+        : error instanceof Error ? error.message : "策划案导图重构失败。";
+      pushToast("error", message);
+      throw new Error(message);
+    }
+  }
+
+  async function importResearchDocument(file: File) {
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/research-document", {
+        method: "POST",
+        body: formData
+      });
+      const payload = await readApiResponse<{
+        content?: string;
+        title?: string;
+        truncated?: boolean;
+        error?: string;
+      }>(response);
+      if (!response.ok || !payload.content) {
+        throw new Error(payload.error || "策划案文件读取失败。");
+      }
+      const title = payload.title?.trim() || "导入策划案";
+      const importedMessage: ResearchMessage = {
+        id: makeId("research-imported-document"),
+        role: "assistant",
+        content: `# ${title}\n\n${payload.content}`
+      };
+      setResearchMessages((current) => [
+        ...current,
+        { id: makeId("research-import-user"), role: "user", content: title },
+        importedMessage
+      ]);
+      pushToast(
+        payload.truncated ? "info" : "success",
+        payload.truncated ? "策划案较长，已提取前 16 万字用于生成导图。" : "策划案全文已读取，正在准备战略导图。"
+      );
+      return importedMessage;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "策划案文件读取失败。";
+      pushToast("error", message);
+      throw new Error(message);
+    }
+  }
+
+  async function openResearchMindMap(message: ResearchMessage) {
+    const reusableSession = mindMapSessions.find((session) =>
+      session.analysisMode === "ai" &&
+      session.analysisVersion === "argument-v2" &&
+      session.message.content === message.content
+    );
+    if (reusableSession) {
+      setActiveMindMapSessionId(reusableSession.id);
+      setActiveMindMap({ message: reusableSession.message, tree: reusableSession.tree });
+      changeSection("mindmap");
+      pushToast("success", "已直接打开这份策划案已有的导图结果。");
+      return;
+    }
+    if (mindMapGenerationLockRef.current) {
+      pushToast("info", "上一份导图仍在分析中，请等待完成后再试。");
+      return;
+    }
+    mindMapGenerationLockRef.current = true;
+    setMindMapGenerationError("");
+    setIsGeneratingMindMap(true);
+    changeSection("mindmap");
+    try {
+      const tree = await generateResearchMindMap(message.content);
+      const session: MindMapSession = {
+        id: makeId("mindmap"),
+        title: tree.label.trim().slice(0, 48) || "策划案思维导图",
+        updatedAt: Date.now(),
+        message,
+        tree,
+        canRevise: true,
+        analysisMode: "ai",
+        analysisVersion: "argument-v2"
+      };
+      setMindMapSessions((current) => {
+        const next = [session, ...current];
+        persistMindMapSessions(next);
+        return next;
+      });
+      setActiveMindMapSessionId(session.id);
+      setActiveMindMap({ message, tree });
+    } catch (error) {
+      setMindMapGenerationError(error instanceof Error ? error.message : "导图生成失败，请稍后重试。");
+      throw error;
+    } finally {
+      mindMapGenerationLockRef.current = false;
+      setIsGeneratingMindMap(false);
+    }
+  }
+
+  function createNewMindMap() {
+    const session = createBlankMindMapSession();
+    setMindMapSessions((current) => {
+      const next = [session, ...current];
+      persistMindMapSessions(next);
+      return next;
+    });
+    setActiveMindMapSessionId(session.id);
+    setActiveMindMap({ message: session.message, tree: session.tree });
+  }
+
+  function selectMindMapSession(sessionId: string) {
+    const session = mindMapSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    setActiveMindMapSessionId(session.id);
+    setActiveMindMap({ message: session.message, tree: session.tree });
+  }
+
+  function updateActiveMindMapTree(tree: MindMapTreeData) {
+    if (!activeMindMapSessionId) return;
+    setActiveMindMap({ message: activeMindMap?.message || { id: "", role: "assistant", content: "" }, tree });
+    setMindMapSessions((current) => {
+      const next = current
+        .map((session) => session.id === activeMindMapSessionId
+          ? { ...session, title: tree.label.trim().slice(0, 48) || session.title, tree, updatedAt: Date.now() }
+          : session)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      persistMindMapSessions(next);
+      return next;
+    });
+  }
+
+  function deleteMindMapSession(sessionId: string) {
+    const remaining = mindMapSessions.filter((item) => item.id !== sessionId);
+    const next = remaining.length ? remaining : [createBlankMindMapSession()];
+    persistMindMapSessions(next);
+    setMindMapSessions(next);
+    if (sessionId === activeMindMapSessionId) {
+      setActiveMindMapSessionId(next[0].id);
+      setActiveMindMap({ message: next[0].message, tree: next[0].tree });
+    }
+  }
+
+  async function importDocumentToMindMap(file: File) {
+    if (isImportingMindMap) return;
+    setIsImportingMindMap(true);
+    try {
+      const message = await importResearchDocument(file);
+      await openResearchMindMap(message);
+    } finally {
+      setIsImportingMindMap(false);
+    }
+  }
+
   function startNewResearchSession() {
     if (isResearchResponding) {
       pushToast("info", "请等待当前策划回复完成后再新建会话。");
@@ -2107,7 +2342,7 @@ export default function Home() {
                 onSend={sendResearchMessage}
                 onToggleVoiceInput={toggleResearchVoiceInput}
                 onRemoveFile={(index) => setResearchFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))}
-                onReviseMessage={reviseResearchMessage}
+                onOpenMindMap={openResearchMindMap}
                 sessions={researchSessions}
                 activeSessionId={activeResearchSessionId}
                 historyReady={isResearchHistoryReady}
@@ -2121,6 +2356,32 @@ export default function Home() {
             ) : null}
 
             {activeSection === "vent" ? <VentEditor /> : null}
+
+            {activeSection === "mindmap" ? (
+              <MindMapSection
+                activeMap={activeMindMap}
+                sessions={mindMapSessions}
+                activeSessionId={activeMindMapSessionId}
+                isImporting={isImportingMindMap}
+                isGenerating={isGeneratingMindMap}
+                generationError={mindMapGenerationError}
+                onImport={importDocumentToMindMap}
+                onDismissGenerationError={() => setMindMapGenerationError("")}
+                onNew={createNewMindMap}
+                onSelect={selectMindMapSession}
+                onDelete={deleteMindMapSession}
+                onTreeChange={updateActiveMindMapTree}
+                onRequestRevision={async (request) => {
+                  if (!activeMindMap) return;
+                  await reviseResearchMessage(
+                    activeMindMap.message.id,
+                    activeMindMap.message.content,
+                    request
+                  );
+                  changeSection("research");
+                }}
+              />
+            ) : null}
 
             {activeSection === "api" ? (
               <ApiSection
@@ -2192,6 +2453,14 @@ function WorkspaceNav({
             <Grid3X3 className="h-4 w-4" />
             <span>网孔编辑</span>
           </button>
+          <button
+            type="button"
+            className={`workspace-nav-item ${activeSection === "mindmap" ? "active" : ""}`}
+            onClick={() => onChange("mindmap")}
+          >
+            <Network className="h-4 w-4" />
+            <span>思维导图</span>
+          </button>
         </div>
       </div>
 
@@ -2220,7 +2489,7 @@ function ResearchSection({
   onSend,
   onToggleVoiceInput,
   onRemoveFile,
-  onReviseMessage,
+  onOpenMindMap,
   sessions,
   activeSessionId,
   historyReady,
@@ -2241,11 +2510,7 @@ function ResearchSection({
   onSend: () => void;
   onToggleVoiceInput: () => void;
   onRemoveFile: (index: number) => void;
-  onReviseMessage: (
-    messageId: string,
-    originalContent: string,
-    request: MindMapRevisionRequest
-  ) => Promise<void>;
+  onOpenMindMap: (message: ResearchMessage) => Promise<void>;
   sessions: ResearchSession[];
   activeSessionId: string;
   historyReady: boolean;
@@ -2260,13 +2525,14 @@ function ResearchSection({
   const historyImportInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const lastAutoPositionedMessageIdRef = useRef(messages.at(-1)?.id || "");
+  const positionedResearchSessionIdRef = useRef("");
   const upwardWheelDistanceRef = useRef(0);
   const lastUpwardWheelAtRef = useRef(0);
   const returnToMessageTopTimerRef = useRef<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showReturnToMessageTop, setShowReturnToMessageTop] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [mindMapMessage, setMindMapMessage] = useState<ResearchMessage | null>(null);
+  const [mindMapLoadingMessageId, setMindMapLoadingMessageId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -2277,6 +2543,17 @@ function ResearchSection({
     const frameId = window.requestAnimationFrame(() => {
       const stream = streamRef.current;
       if (!stream) return;
+      const sessionChanged = positionedResearchSessionIdRef.current !== activeSessionId;
+      if (sessionChanged) {
+        const savedPosition = researchScrollPositions.get(activeSessionId);
+        stream.scrollTo({
+          top: savedPosition ?? stream.scrollHeight,
+          behavior: "auto"
+        });
+        positionedResearchSessionIdRef.current = activeSessionId;
+        if (latestMessageId) lastAutoPositionedMessageIdRef.current = latestMessageId;
+        return;
+      }
       const isNewMessage = Boolean(
         latestMessageId && latestMessageId !== lastAutoPositionedMessageIdRef.current
       );
@@ -2293,14 +2570,13 @@ function ResearchSection({
           return;
         }
       }
-      stream.scrollTo({
-        top: stream.scrollHeight,
-        behavior: "smooth"
-      });
-      if (latestMessageId) lastAutoPositionedMessageIdRef.current = latestMessageId;
+      if (isNewMessage) {
+        stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+        lastAutoPositionedMessageIdRef.current = latestMessageId;
+      }
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [isResponding, latestMessageId, latestMessageRole, messages.length]);
+  }, [activeSessionId, latestMessageId, latestMessageRole]);
 
   useEffect(() => () => {
     if (returnToMessageTopTimerRef.current !== null) {
@@ -2513,7 +2789,14 @@ function ResearchSection({
             <ArrowUp className="h-4 w-4" />
           </button>
         ) : null}
-        <div ref={streamRef} className="research-stream" onWheel={detectRapidUpwardResearchScroll}>
+        <div
+          ref={streamRef}
+          className="research-stream"
+          onWheel={detectRapidUpwardResearchScroll}
+          onScroll={(event) => {
+            if (activeSessionId) researchScrollPositions.set(activeSessionId, event.currentTarget.scrollTop);
+          }}
+        >
           {messages.map((message) => (
             <article
               key={message.id}
@@ -2541,11 +2824,20 @@ function ResearchSection({
                         <button
                           type="button"
                           className="research-message-tool"
-                          onClick={() => setMindMapMessage(message)}
-                          title="转为思维导图"
+                          onClick={() => {
+                            if (mindMapLoadingMessageId) return;
+                            setMindMapLoadingMessageId(message.id);
+                            void onOpenMindMap(message)
+                              .catch(() => undefined)
+                              .finally(() => setMindMapLoadingMessageId(null));
+                          }}
+                          disabled={Boolean(mindMapLoadingMessageId)}
+                          title={mindMapLoadingMessageId === message.id ? "正在重构战略导图" : "转为战略思维导图"}
                           aria-label="转为思维导图"
                         >
-                          <Network className="h-3.5 w-3.5" />
+                          {mindMapLoadingMessageId === message.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Network className="h-3.5 w-3.5" />}
                         </button>
                         <button
                           type="button"
@@ -2688,16 +2980,120 @@ function ResearchSection({
         </div>
         </div>
       </div>
-      {mindMapMessage ? (
-        <ResearchMindMapModal
-          content={mindMapMessage.content}
-          onClose={() => setMindMapMessage(null)}
-          onRequestRevision={async (request) => {
-            await onReviseMessage(mindMapMessage.id, mindMapMessage.content, request);
-            setMindMapMessage(null);
-          }}
-        />
-      ) : null}
+    </section>
+  );
+}
+
+function MindMapSection({
+  activeMap,
+  sessions,
+  activeSessionId,
+  isImporting,
+  isGenerating,
+  generationError,
+  onImport,
+  onDismissGenerationError,
+  onNew,
+  onSelect,
+  onDelete,
+  onTreeChange,
+  onRequestRevision
+}: {
+  activeMap: ActiveMindMap | null;
+  sessions: MindMapSession[];
+  activeSessionId: string;
+  isImporting: boolean;
+  isGenerating: boolean;
+  generationError: string;
+  onImport: (file: File) => Promise<void>;
+  onDismissGenerationError: () => void;
+  onNew: () => void;
+  onSelect: (sessionId: string) => void;
+  onDelete: (sessionId: string) => void;
+  onTreeChange: (tree: MindMapTreeData) => void;
+  onRequestRevision: (request: MindMapRevisionRequest) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+
+  return (
+    <section className="section-surface mindmap-workspace-section">
+      <div className="mindmap-project-workspace">
+        <aside className="research-history-sidebar mindmap-history-sidebar">
+          <div className="research-history-heading">
+            <div><strong>历史导图</strong><span>{sessions.length} 个项目</span></div>
+            <button type="button" onClick={onNew} title="新建空白导图" aria-label="新建空白导图">
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+          <input
+            ref={inputRef}
+            className="hidden"
+            type="file"
+            accept=".docx,.pdf,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void onImport(file).catch(() => undefined);
+            }}
+          />
+          <button className="research-history-import mindmap-upload-action" type="button" onClick={() => inputRef.current?.click()} disabled={isImporting}>
+            {isImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            <span>{isImporting ? "正在阅读全文与论证分析" : "上传策划案生成导图"}</span>
+          </button>
+          <div className="research-history-list mindmap-history-list">
+            {sessions.map((session) => (
+              <div key={session.id} className={`research-history-item ${session.id === activeSessionId ? "active" : ""}`}>
+                <button type="button" className="research-history-item-main" onClick={() => onSelect(session.id)}>
+                  <Network className="h-3.5 w-3.5" />
+                  <span><strong>{session.title}</strong><small>{formatResearchSessionTime(session.updatedAt)}</small></span>
+                </button>
+                <div className="research-history-item-actions">
+                  <button type="button" onClick={() => onDelete(session.id)} title="删除导图" aria-label={`删除${session.title}`}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </aside>
+        <div className="mindmap-canvas-pane">
+          {activeMap ? (
+            <ResearchMindMapModal
+              key={activeSessionId}
+              embedded
+              canRevise={Boolean(activeSession?.canRevise)}
+              centerInitialView={Boolean(
+                activeSession &&
+                !activeSession.canRevise &&
+                !activeSession.tree.position &&
+                activeSession.tree.children.length === 0
+              )}
+              title={activeSession?.title || "新思维导图"}
+              content={activeMap.message.content}
+              initialTree={activeMap.tree}
+              onTreeChange={onTreeChange}
+              onClose={onNew}
+              onRequestRevision={onRequestRevision}
+            />
+          ) : null}
+          {isGenerating ? (
+            <div className="mindmap-generation-status" role="status" aria-live="polite">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <strong>正在生成战略思维导图</strong>
+              <span>正在分段阅读全文并建立内容账本；随后将重构七阶段论证链并执行结构质量验收。</span>
+            </div>
+          ) : null}
+          {!isGenerating && generationError ? (
+            <div className="mindmap-generation-status error" role="alert">
+              <X className="h-5 w-5" />
+              <strong>导图生成失败</strong>
+              <span>{generationError}</span>
+              <button type="button" onClick={onDismissGenerationError}>我知道了</button>
+            </div>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }
@@ -2844,6 +3240,30 @@ function persistResearchSessions(sessions: ResearchSession[]) {
 
 function sortResearchSessionsByUpdatedAt(sessions: ResearchSession[]) {
   return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 40);
+}
+
+function createBlankMindMapSession(): MindMapSession {
+  const id = makeId("mindmap");
+  const tree: MindMapTreeData = { id: `${id}-root`, label: "新思维导图", children: [] };
+  return {
+    id,
+    title: tree.label,
+    updatedAt: Date.now(),
+    canRevise: false,
+    tree,
+    message: { id: `${id}-blank`, role: "assistant", content: "# 新思维导图" }
+  };
+}
+
+function persistMindMapSessions(sessions: MindMapSession[]) {
+  try {
+    localStorage.setItem(
+      MIND_MAP_HISTORY_STORAGE_KEY,
+      JSON.stringify([...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60))
+    );
+  } catch {
+    // 浏览器存储不可用时仍保留当前内存中的导图。
+  }
 }
 
 function getResearchSessionTitle(messages: ResearchMessage[]) {
