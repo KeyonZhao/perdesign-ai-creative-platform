@@ -13,7 +13,7 @@ const imageSchema = z.object({
 
 const messageSchema = z.object({
   role: z.enum(["assistant", "user"]),
-  content: z.string().min(1),
+  content: z.string(),
   images: z.array(imageSchema).max(4).optional()
 });
 
@@ -21,7 +21,11 @@ const requestSchema = z.object({
   apiKey: z.string().min(1, "请先填写对话 API Key。"),
   baseUrl: z.string().url("请填写有效的对话请求地址。"),
   model: z.string().min(1, "请填写对话模型。"),
-  conversation: z.array(messageSchema).min(1, "当前没有可用对话内容。")
+  conversation: z.array(messageSchema)
+    .transform((messages) => messages
+      .map((message) => ({ ...message, content: message.content.trim() }))
+      .filter((message) => message.content.length > 0))
+    .pipe(z.array(messageSchema).min(1, "当前没有可用对话内容。"))
 });
 
 export async function POST(request: Request) {

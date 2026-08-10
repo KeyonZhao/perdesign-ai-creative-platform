@@ -1690,7 +1690,9 @@ export default function Home() {
       dataUrl: file.dataUrl
     }));
     const nextConversation = [
-      ...researchMessages.map((message) => ({ role: message.role, content: message.content })),
+      ...researchMessages
+        .filter((message) => message.content.trim().length > 0)
+        .map((message) => ({ role: message.role, content: message.content.trim() })),
       {
         role: "user" as const,
         content: userContent,
@@ -1763,7 +1765,7 @@ export default function Home() {
       const reason = error instanceof Error ? error.message : "策划研究回复失败。";
       pushToast("error", reason);
       setResearchMessages((current) => [
-        ...current,
+        ...current.filter((message) => message.content.trim().length > 0),
         {
           id: makeId("research-assistant"),
           role: "assistant",
@@ -3212,12 +3214,14 @@ function createResearchSessionRecord(): ResearchSession {
 }
 
 function sanitizeResearchMessages(messages: ResearchMessage[]): ResearchMessage[] {
-  return messages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    sources: message.sources
-  }));
+  return messages
+    .filter((message) => message.content.trim().length > 0)
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content.trim(),
+      sources: message.sources
+    }));
 }
 
 function hasMeaningfulResearchSessionContent(messages: ResearchMessage[]) {
