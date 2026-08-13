@@ -110,7 +110,8 @@ type ResearchFile = {
   name: string;
   size: number;
   type: string;
-  dataUrl: string;
+  dataUrl?: string;
+  extractedText?: string;
 };
 type PendingAuthAction =
   | { type: "generate" }
@@ -129,8 +130,11 @@ type ResearchMessage = {
   role: "assistant" | "user";
   content: string;
   files?: ResearchFile[];
-  sources?: string[];
+  sources?: Array<string | ResearchWebSource>;
+  images?: ResearchWebImage[];
 };
+type ResearchWebSource = { title: string; url: string; snippet?: string; domain?: string };
+type ResearchWebImage = { url: string; sourceUrl: string; sourceTitle: string; alt?: string };
 type ResearchSession = {
   id: string;
   title: string;
@@ -1685,17 +1689,22 @@ export default function Home() {
 
     const files = researchFiles.length ? [...researchFiles] : undefined;
     const userContent = researchInput.trim() || "请基于我上传的资料继续展开研究。";
-    const conversationImages = files?.map((file) => ({
+    const requestedWebEvidence = /(?:链接|来源|出处|数据|资料|网页|网站|附图|图片|照片|案例图)/.test(userContent);
+    const conversationImages = files?.filter((file) => file.dataUrl?.startsWith("data:image/")).map((file) => ({
       name: file.name,
-      dataUrl: file.dataUrl
+      dataUrl: file.dataUrl!
     }));
+    const documentContext = files
+      ?.filter((file) => file.extractedText)
+      .map((file) => `\n\n--- 上传文件：${file.name} ---\n${file.extractedText}`)
+      .join("") || "";
     const nextConversation = [
       ...researchMessages
         .filter((message) => message.content.trim().length > 0)
         .map((message) => ({ role: message.role, content: message.content.trim() })),
       {
         role: "user" as const,
-        content: userContent,
+        content: `${userContent}${documentContext}`,
         images: conversationImages
       }
     ];
@@ -1744,17 +1753,29 @@ export default function Home() {
       await readNdjsonStream(response.body, (event) => {
         if (event.type === "delta" && event.content) {
           streamedContent += event.content;
-          setResearchMessages((current) => current.map((message) =>
-            message.id === assistantMessageId
-              ? { ...message, content: streamedContent }
-              : message
-          ));
+          if (!requestedWebEvidence) {
+            setResearchMessages((current) => current.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: streamedContent }
+                : message
+            ));
+          }
         } else if (event.type === "done") {
+          const sourceCount = event.sources?.filter((source) => typeof source !== "string").length || 0;
+          const imageCount = event.images?.length || 0;
           setResearchMessages((current) => current.map((message) =>
             message.id === assistantMessageId
-              ? { ...message, sources: event.sources || [] }
+              ? {
+                  ...message,
+                  content: reconcileResearchEvidenceClaims(streamedContent, sourceCount, imageCount, requestedWebEvidence),
+                  sources: event.sources || [],
+                  images: event.images || []
+                }
               : message
           ));
+          if (sourceCount || imageCount) {
+            pushToast("success", `已附上 ${sourceCount} 个网络来源${imageCount ? `和 ${imageCount} 张相关图片` : ""}，位于本条回复下方。`);
+          }
         } else if (event.type === "error") {
           streamError = event.error || "策划研究回复失败。";
         }
@@ -2160,22 +2181,32 @@ export default function Home() {
     if (!files?.length) return;
     const availableSlots = Math.max(0, 4 - researchFiles.length);
     if (!availableSlots) {
-      pushToast("error", "每次最多上传 4 张图片。");
+      pushToast("error", "每次最多上传 4 个文件或图片。");
       return;
     }
 
-    const selectedFiles = Array.from(files);
-    const imageFiles = selectedFiles.filter((file) => file.type.startsWith("image/")).slice(0, availableSlots);
-    if (imageFiles.length !== selectedFiles.length) {
-      pushToast("error", "策划研究目前仅支持上传图片，每次最多 4 张。");
+    const selectedFiles = Array.from(files).slice(0, availableSlots);
+    const supportedFiles = selectedFiles.filter((file) =>
+      file.type.startsWith("image/") || /\.(?:pdf|docx|txt|md|markdown)$/i.test(file.name)
+    );
+    if (supportedFiles.length !== selectedFiles.length) {
+      pushToast("error", "支持图片、PDF、DOCX、TXT 和 Markdown 文件。其他文件已跳过。");
     }
-    if (!imageFiles.length) return;
+    if (!supportedFiles.length) return;
 
     try {
       const next = await Promise.all(
-        imageFiles.map(async (file) => {
+        supportedFiles.map(async (file) => {
           if (file.size > 25 * 1024 * 1024) {
             throw new Error(`${file.name} 超过 25MB，请压缩后重新上传。`);
+          }
+          if (!file.type.startsWith("image/")) {
+            const formData = new FormData();
+            formData.append("file", file);
+            const response = await fetch("/api/research-document", { method: "POST", body: formData });
+            const payload = await readApiResponse<{ content?: string; error?: string }>(response);
+            if (!response.ok || !payload.content) throw new Error(payload.error || `${file.name} 无法读取。`);
+            return { name: file.name, size: file.size, type: file.type, extractedText: payload.content } satisfies ResearchFile;
           }
           const originalDataUrl = await readFileAsDataUrl(file);
           const dataUrl = await prepareImageForVision(originalDataUrl, 1600, 0.82);
@@ -2189,7 +2220,7 @@ export default function Home() {
       );
       setResearchFiles((current) => [...current, ...next].slice(0, 4));
     } catch (error) {
-      pushToast("error", error instanceof Error ? error.message : "图片读取失败，请更换图片后重试。");
+      pushToast("error", error instanceof Error ? error.message : "附件读取失败，请更换文件后重试。");
     }
   }
 
@@ -2395,7 +2426,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        <span className="app-version" aria-label="当前版本 v1.0.4">v1.0.4</span>
+        <span className="app-version" aria-label="当前版本 v1.0.5">v1.0.5</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}
@@ -2816,7 +2847,7 @@ function ResearchSection({
                   onContextMenu={(event) => selectMessageText(event.currentTarget)}
                 >
                   {message.role === "assistant"
-                    ? <ResearchMarkdown content={message.content} />
+                    ? <ResearchMarkdown content={message.content} sources={message.sources} images={message.images} />
                     : message.content}
                 </div>
                 {message.role === "assistant" ? (
@@ -2865,19 +2896,33 @@ function ResearchSection({
                 ) : null}
               </div>
               {message.sources?.length ? (
-                <div className="research-chip-row research-source-row">
-                  {message.sources.map((source) => (
-                    <span key={`${message.id}-${source}`} className="research-chip source">
-                      {source}
-                    </span>
-                  ))}
+                <div className="research-evidence-section">
+                  <div className="research-evidence-heading">资料来源</div>
+                  <div className="research-chip-row research-source-row">
+                    {message.sources.map((source) => typeof source === "string" ? (
+                      <span key={`${message.id}-${source}`} className="research-chip source">{source}</span>
+                    ) : (
+                      <a
+                        key={`${message.id}-${source.url}`}
+                        className="research-chip source linked"
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={source.snippet || source.title}
+                      >
+                        <span className="research-source-index">W{message.sources!.filter((item) => typeof item !== "string").indexOf(source) + 1}</span>
+                        {source.title}
+                        <span className="research-source-domain">{source.domain || safeResearchHostname(source.url)}</span>
+                      </a>
+                    ))}
+                  </div>
                 </div>
               ) : null}
               {message.files?.length ? (
                 <div className="research-chip-row">
                   {message.files.map((file, index) => (
                     <span key={`${message.id}-${file.name}-${index}`} className="research-chip research-file-chip">
-                      <img src={file.dataUrl} alt="" className="research-file-thumb" />
+                      {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileDown className="h-3.5 w-3.5" />}
                       {file.name}
                     </span>
                   ))}
@@ -2932,7 +2977,7 @@ function ResearchSection({
                   onClick={() => onRemoveFile(index)}
                   title="点击移除"
                 >
-                  <img src={file.dataUrl} alt="" className="research-file-thumb" />
+                  {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileDown className="h-3.5 w-3.5" />}
                   {file.name}
                 </button>
               ))}
@@ -2946,6 +2991,11 @@ function ResearchSection({
               className="research-textarea"
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onPaste={(event) => {
+                if (!event.clipboardData.files.length) return;
+                event.preventDefault();
+                void addFiles(event.clipboardData.files);
+              }}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" || event.shiftKey) return;
                 if (event.nativeEvent.isComposing) return;
@@ -2972,7 +3022,7 @@ function ResearchSection({
             ref={fileInputRef}
             className="hidden"
             type="file"
-            accept="image/*"
+            accept="image/*,.pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
             multiple
             onChange={(event) => {
               void addFiles(event.target.files);
@@ -3107,9 +3157,18 @@ function canCreateResearchMindMap(content: string) {
   return content.length >= 280 && structuralLines.length >= 4;
 }
 
-function ResearchMarkdown({ content }: { content: string }) {
+function ResearchMarkdown({
+  content,
+  sources,
+  images
+}: {
+  content: string;
+  sources?: Array<string | ResearchWebSource>;
+  images?: ResearchWebImage[];
+}) {
   const lines = content.replace(/\r/g, "").split("\n");
   const blocks: ReactNode[] = [];
+  const webSources = (sources || []).filter((source): source is ResearchWebSource => typeof source !== "string");
   let index = 0;
 
   while (index < lines.length) {
@@ -3121,7 +3180,7 @@ function ResearchMarkdown({ content }: { content: string }) {
     const heading = line.match(/^(#{1,4})\s+(.+)/);
     if (heading) {
       const level = heading[1].length;
-      const children = renderResearchInlineMarkdown(heading[2]);
+      const children = renderResearchInlineMarkdown(heading[2], webSources);
       blocks.push(level === 1
         ? <h1 key={`h-${index}`}>{children}</h1>
         : level === 2
@@ -3135,7 +3194,7 @@ function ResearchMarkdown({ content }: { content: string }) {
     if (/^\s*[-*•]\s+/.test(line)) {
       const items: ReactNode[] = [];
       while (index < lines.length && /^\s*[-*•]\s+/.test(lines[index])) {
-        items.push(<li key={`ul-${index}`}>{renderResearchInlineMarkdown(lines[index].replace(/^\s*[-*•]\s+/, ""))}</li>);
+        items.push(<li key={`ul-${index}`}>{renderResearchInlineMarkdown(lines[index].replace(/^\s*[-*•]\s+/, ""), webSources)}</li>);
         index += 1;
       }
       blocks.push(<ul key={`ul-block-${index}`}>{items}</ul>);
@@ -3144,7 +3203,7 @@ function ResearchMarkdown({ content }: { content: string }) {
     if (/^\s*\d+[.)、]\s+/.test(line)) {
       const items: ReactNode[] = [];
       while (index < lines.length && /^\s*\d+[.)、]\s+/.test(lines[index])) {
-        items.push(<li key={`ol-${index}`}>{renderResearchInlineMarkdown(lines[index].replace(/^\s*\d+[.)、]\s+/, ""))}</li>);
+        items.push(<li key={`ol-${index}`}>{renderResearchInlineMarkdown(lines[index].replace(/^\s*\d+[.)、]\s+/, ""), webSources)}</li>);
         index += 1;
       }
       blocks.push(<ol key={`ol-block-${index}`}>{items}</ol>);
@@ -3156,7 +3215,7 @@ function ResearchMarkdown({ content }: { content: string }) {
         quote.push(lines[index].replace(/^\s*>\s?/, ""));
         index += 1;
       }
-      blocks.push(<blockquote key={`quote-${index}`}>{renderResearchInlineMarkdown(quote.join(" "))}</blockquote>);
+      blocks.push(<blockquote key={`quote-${index}`}>{renderResearchInlineMarkdown(quote.join(" "), webSources)}</blockquote>);
       continue;
     }
     if (/^\s*---+\s*$/.test(line)) {
@@ -3176,22 +3235,74 @@ function ResearchMarkdown({ content }: { content: string }) {
       paragraph.push(lines[index].trim());
       index += 1;
     }
-    blocks.push(<p key={`p-${index}`}>{renderResearchInlineMarkdown(paragraph.join(" "))}</p>);
+    blocks.push(<p key={`p-${index}`}>{renderResearchInlineMarkdown(paragraph.join(" "), webSources)}</p>);
   }
 
-  return <div className="research-markdown">{blocks}</div>;
+  const imagesByBlock = new Map<number, ResearchWebImage[]>();
+  (images || []).forEach((image, imageIndex) => {
+    const sourceIndex = webSources.findIndex((source) => source.url === image.sourceUrl);
+    const citationOffset = sourceIndex >= 0 ? content.indexOf(`[W${sourceIndex + 1}]`) : -1;
+    const proportionalIndex = citationOffset >= 0 && content.length
+      ? Math.floor((citationOffset / content.length) * Math.max(blocks.length, 1))
+      : Math.floor(((imageIndex + 1) / ((images?.length || 0) + 1)) * Math.max(blocks.length, 1));
+    const blockIndex = Math.max(0, Math.min(blocks.length - 1, proportionalIndex));
+    imagesByBlock.set(blockIndex, [...(imagesByBlock.get(blockIndex) || []), image]);
+  });
+
+  const interleaved: ReactNode[] = [];
+  blocks.forEach((block, blockIndex) => {
+    interleaved.push(block);
+    (imagesByBlock.get(blockIndex) || []).forEach((image) => {
+      interleaved.push(<ResearchInlineImage key={`web-image-${image.url}`} image={image} />);
+    });
+  });
+
+  return <div className="research-markdown">{interleaved}</div>;
 }
 
-function renderResearchInlineMarkdown(text: string) {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((part, index) => {
+function renderResearchInlineMarkdown(text: string, sources: ResearchWebSource[] = []) {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[W\d+\])/g).filter(Boolean).map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={`${index}-${part}`}>{part.slice(2, -2)}</strong>;
     }
     if (part.startsWith("`") && part.endsWith("`")) {
       return <code key={`${index}-${part}`}>{part.slice(1, -1)}</code>;
     }
+    const citation = part.match(/^\[W(\d+)\]$/);
+    if (citation) {
+      const source = sources[Number(citation[1]) - 1];
+      return source ? (
+        <a
+          key={`${index}-${part}`}
+          className="research-inline-citation"
+          href={source.url}
+          target="_blank"
+          rel="noreferrer"
+          title={source.title}
+        >
+          {part}
+        </a>
+      ) : part;
+    }
     return part;
   });
+}
+
+function ResearchInlineImage({ image }: { image: ResearchWebImage }) {
+  return (
+    <figure className="research-inline-figure">
+      <a href={image.sourceUrl} target="_blank" rel="noreferrer" title={`查看图片来源：${image.sourceTitle}`}>
+        <img
+          src={image.url}
+          alt={image.alt || image.sourceTitle}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={(event) => { event.currentTarget.closest("figure")?.remove(); }}
+        />
+      </a>
+      <figcaption>资料图：{image.sourceTitle} · 点击查看原始网页</figcaption>
+    </figure>
+  );
 }
 
 function createResearchWelcomeMessages(): ResearchMessage[] {
@@ -3220,7 +3331,9 @@ function sanitizeResearchMessages(messages: ResearchMessage[]): ResearchMessage[
       id: message.id,
       role: message.role,
       content: message.content.trim(),
-      sources: message.sources
+      files: message.files,
+      sources: message.sources,
+      images: message.images
     }));
 }
 
@@ -3323,24 +3436,69 @@ function parseResearchProjectFile(raw: string): { title: string; messages: Resea
   }
   const messages = payload.project.messages.map((item, index) => {
     if (!item || typeof item !== "object") throw new Error(`第 ${index + 1} 条消息格式不正确。`);
-    const message = item as { role?: unknown; content?: unknown; sources?: unknown };
+    const message = item as { role?: unknown; content?: unknown; sources?: unknown; images?: unknown };
     if ((message.role !== "assistant" && message.role !== "user") || typeof message.content !== "string") {
       throw new Error(`第 ${index + 1} 条消息缺少有效内容。`);
     }
     if (!message.content.trim() || message.content.length > 500_000) {
       throw new Error(`第 ${index + 1} 条消息内容不正确或过长。`);
     }
-    const sources = Array.isArray(message.sources)
-      ? message.sources.filter((source): source is string => typeof source === "string").slice(0, 50)
-      : undefined;
+    const sources = sanitizeImportedResearchSources(message.sources);
+    const images = sanitizeImportedResearchImages(message.images);
     return {
       id: makeId(`research-${message.role}`),
       role: message.role,
       content: message.content,
-      sources
+      sources,
+      images
     } satisfies ResearchMessage;
   });
   return { title: title.slice(0, 80), messages };
+}
+
+function safeResearchHostname(url: string) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "来源网页"; }
+}
+
+function reconcileResearchEvidenceClaims(content: string, sourceCount: number, imageCount: number, evidenceRequested: boolean) {
+  if (!evidenceRequested && !imageCount) return content;
+  const cleaned = content
+    .split("\n")
+    .filter((line) => !/(?:不能|无法|不支持).{0,22}(?:抓取|获取|访问|展示|提供|贴).{0,28}(?:网页|网络|网上)?图片|(?:不能|无法|不支持).{0,22}(?:从网上|从网络).{0,28}(?:图片|贴图)/.test(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const evidenceNote = imageCount
+    ? `> 平台已检索到 ${sourceCount} 个网络来源和 ${imageCount} 张相关附图，图片与原始网页入口见本条回复下方。`
+    : `> 本次检索暂未返回可展示附图；已获得的资料来源入口见本条回复下方。`;
+  return cleaned.includes("本条回复下方") ? cleaned : `${cleaned}\n\n${evidenceNote}`;
+}
+
+function sanitizeImportedResearchSources(value: unknown): ResearchMessage["sources"] {
+  if (!Array.isArray(value)) return undefined;
+  const result: Array<string | ResearchWebSource> = [];
+  for (const source of value) {
+    if (typeof source === "string") {
+      result.push(source.slice(0, 160));
+      continue;
+    }
+    if (!source || typeof source !== "object") continue;
+    const item = source as Partial<ResearchWebSource>;
+    if (typeof item.title !== "string" || typeof item.url !== "string" || !/^https?:\/\//i.test(item.url)) continue;
+    result.push({ title: item.title.slice(0, 240), url: item.url, snippet: typeof item.snippet === "string" ? item.snippet.slice(0, 500) : "", domain: typeof item.domain === "string" ? item.domain.slice(0, 120) : "" });
+  }
+  return result.slice(0, 50);
+}
+
+function sanitizeImportedResearchImages(value: unknown): ResearchWebImage[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((image) => {
+    if (!image || typeof image !== "object") return [];
+    const item = image as Partial<ResearchWebImage>;
+    if (typeof item.url !== "string" || typeof item.sourceUrl !== "string" || typeof item.sourceTitle !== "string") return [];
+    if (!/^https?:\/\//i.test(item.url) || !/^https?:\/\//i.test(item.sourceUrl)) return [];
+    return [{ url: item.url, sourceUrl: item.sourceUrl, sourceTitle: item.sourceTitle.slice(0, 240), alt: typeof item.alt === "string" ? item.alt.slice(0, 240) : "" }];
+  }).slice(0, 8);
 }
 
 function ApiSection(props: {
@@ -3492,7 +3650,8 @@ async function readApiResponse<T>(response: Response): Promise<T> {
 type ResearchStreamEvent = {
   type: "delta" | "done" | "error";
   content?: string;
-  sources?: string[];
+  sources?: Array<string | ResearchWebSource>;
+  images?: ResearchWebImage[];
   error?: string;
 };
 

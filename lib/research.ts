@@ -3,6 +3,7 @@ import { execFile } from "child_process";
 import path from "path";
 import { promisify } from "util";
 import { callChatCompletion, streamChatCompletion } from "./aihubmix";
+import { collectResearchWebEvidence, type ResearchWebImage, type ResearchWebSource } from "./research-web";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,8 @@ type KnowledgeDocument = {
 
 type ResearchReply = {
   answer: string;
-  sources: string[];
+  sources: Array<string | ResearchWebSource>;
+  images: ResearchWebImage[];
 };
 
 const PROJECT_BRIEF_LINK = "https://keyonzhao.github.io/perdesign/";
@@ -92,12 +94,18 @@ export async function generateResearchReply(params: {
     params.onDelta?.(answer);
     return {
       answer,
-      sources: []
+      sources: [],
+      images: []
     } satisfies ResearchReply;
   }
 
   const knowledgeDocuments = await loadCoreKnowledgeDocuments();
   const retrieved = retrieveRelevantKnowledge(latestUserMessage, knowledgeDocuments ?? []);
+  // Every substantive research answer is grounded with current web evidence.
+  // Small talk has already returned above, so this does not waste a lookup on greetings.
+  const webEvidence = await collectResearchWebEvidence(
+    buildWebResearchQuery(params.conversation, latestUserMessage)
+  );
   const executionStandardLoaded = knowledgeDocuments.some(
     (document) => document.id === "product-opportunity-execution-standard"
   );
@@ -110,7 +118,11 @@ export async function generateResearchReply(params: {
     messages: [
       {
         role: "system" as const,
-        content: buildResearchSystemPrompt(retrieved.map((item) => ({ title: item.title, excerpt: item.chunk })))
+        content: buildResearchSystemPrompt(
+          retrieved.map((item) => ({ title: item.title, excerpt: item.chunk })),
+          webEvidence.sources,
+          webEvidence.images.length
+        )
       },
       ...params.conversation.map((message) => ({
         role: message.role,
@@ -165,10 +177,48 @@ export async function generateResearchReply(params: {
     sources: [
       ...new Set([
         ...(executionStandardLoaded ? ["产品机会分析执行标准 v3.1"] : []),
-        ...retrieved.map((item) => item.title)
+        ...retrieved.map((item) => item.title),
+        ...webEvidence.sources
       ])
-    ]
+    ],
+    images: webEvidence.images
   } satisfies ResearchReply;
+}
+
+function buildWebResearchQuery(conversation: ResearchConversationMessage[], latestUserMessage: string) {
+  const projectContext = conversation
+    .filter((message) => message.role === "user")
+    .slice(-8)
+    .map((message) => message.content)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const text = projectContext || latestUserMessage;
+  const terms: string[] = [];
+  const brandPatterns = [
+    /(?:为|给)([\u4e00-\u9fa5A-Za-z0-9-]{2,12})(?:设计|做|开发|策划)/g,
+    /(?:品牌|公司|客户)(?:名称)?(?:是|为|叫)?[：:\s]*([\u4e00-\u9fa5A-Za-z0-9-]{2,16})/g
+  ];
+  for (const pattern of brandPatterns) {
+    for (const match of text.matchAll(pattern)) terms.push(match[1]);
+  }
+  const productTerms = [
+    "空调", "冰箱", "洗衣机", "电视", "显示屏", "屏幕", "家电", "汽车", "座椅", "头盔", "耳机",
+    "音箱", "手机", "电脑", "机器人", "咖啡机", "净水器", "热水器", "厨电", "家具", "灯具", "医疗设备",
+    "工业设备", "消费电子", "智能家居", "穿戴设备", "包装", "品牌", "PLC", "可编程逻辑控制器"
+  ];
+  productTerms.forEach((term) => { if (text.includes(term)) terms.push(term); });
+  for (const match of text.matchAll(/\b[A-Z][A-Z0-9-]{1,14}\b/g)) terms.push(match[0]);
+  for (const match of text.matchAll(/[「『“"]([^」』”"]{2,24})[」』”"]/g)) terms.push(match[1]);
+  if (!terms.length) {
+    const fallback = text
+      .replace(/(?:请|帮我|我要|我想|希望|需要|给我|寻找|提供|生成|输出|撰写|策划|研究|相关|一些|一下|图片|链接|来源|数据)/g, " ")
+      .replace(/[^\u4e00-\u9fa5A-Za-z0-9-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (fallback) terms.push(fallback.slice(0, 40));
+  }
+  return [...new Set(terms)].join(" ").slice(0, 100) || latestUserMessage.slice(0, 100);
 }
 
 export async function reviseResearchDocument(params: {
@@ -396,13 +446,22 @@ function buildResearchSystemPrompt(
   knowledge: Array<{
     title: string;
     excerpt: string;
-  }>
+  }>,
+  webSources: ResearchWebSource[] = [],
+  webImageCount = 0
 ) {
   const knowledgeContext = knowledge.length
     ? knowledge
         .map((item, index) => `【知识片段 ${index + 1}｜${item.title}】\n${item.excerpt}`)
         .join("\n\n")
     : "当前没有可用知识片段。";
+  const webContext = webSources.length
+    ? webSources.map((source, index) => [
+        `【网络证据 W${index + 1}｜${source.title}】`,
+        `网址：${source.url}`,
+        `摘要：${source.snippet || "搜索结果未提供摘要，请仅使用标题能够支持的有限判断。"}`
+      ].join("\n")).join("\n\n")
+    : "当前未检索到可验证的网络证据。";
 
   return [
     "你是“品物创新 · 产品战略策划师（Perdesign Product Strategy Architect）”。",
@@ -437,6 +496,13 @@ function buildResearchSystemPrompt(
     "- 优先使用下面给出的知识库内容作为判断依据。",
     "- 如果知识库里有依据，请自然引用来源文件名。",
     "- 如果知识库没有直接答案，可以补充通用商业与产品策略判断，但不要伪造知识库内容。",
+    "- 网络证据只能用于其标题与摘要能够直接支持的判断；不得把搜索摘要扩写成未经证实的事实。",
+    "- 使用网络证据中的数据、趋势或事实时，在对应句末标注 [W1]、[W2] 等来源编号；同一结论可交叉引用多个来源。",
+    "- 对所有有实际内容的问题，都应自然使用可用的网络资料：链接紧跟其支持的文字，不要等用户再次索要来源。",
+    "- 不得编造网址、机构、数据或引用编号。没有网络证据支撑的策略判断应明确写成判断或建议，不要伪装成事实。",
+    webImageCount > 0
+      ? `- 平台已经成功取得 ${webImageCount} 张相关网络资料图片，并会自动插入到引用其来源的对应段落附近。这是已经发生的程序事实。你不得说“不能抓取网页图片”“无法展示图片”“只能提供链接”或任何相反表述。不要把图片说成由你生成。`
+      : "- 本次检索暂未返回可展示的网络图片。不得讨论或判断平台能力，尤其禁止说‘不能从网上抓取图片’‘无法展示图片’‘只能提供链接’。如用户明确索要图片，只能客观表述‘本次检索暂未返回可展示附图’，并继续正常回答其他内容。",
     "- 用户上传图片时，必须直接观察图片内容并结合用户问题分析，不得仅根据文件名猜测，也不要声称自己看不到已上传的图片。",
     "- 输出应达到可直接用于客户汇报或指导设计团队的专业水准。",
     "- 输出完整策划案时使用清晰稳定的 Markdown 层级：一个总标题、一级章节、二级分析模块、三级观点；每个模块用项目符号明确列出关键发现、证据结论与策略行动。",
@@ -446,6 +512,9 @@ function buildResearchSystemPrompt(
     `仅当用户明确希望一次性填写表单时，提供项目表单：${PROJECT_BRIEF_LINK}`,
     "",
     "以下是当前可用的核心知识库片段：",
-    knowledgeContext
+    knowledgeContext,
+    "",
+    "以下是本次实时检索到的网络证据：",
+    webContext
   ].join("\n");
 }

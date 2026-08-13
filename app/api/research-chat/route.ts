@@ -42,7 +42,7 @@ export async function POST(request: Request) {
             ...provider,
             onDelta: (content) => send({ type: "delta", content })
           });
-          send({ type: "done", sources: result.sources });
+          send({ type: "done", sources: result.sources, images: result.images });
         } catch (error) {
           console.error("[research-chat] stream failed", error);
           send({

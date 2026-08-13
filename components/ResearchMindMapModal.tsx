@@ -1,12 +1,13 @@
 "use client";
 
-import { Download, Loader2, Maximize2, Minus, Plus, RefreshCw, X } from "lucide-react";
+import { Bold, Download, FolderPlus, Loader2, Maximize2, Minus, Plus, RefreshCw, X } from "lucide-react";
 import JSZip from "jszip";
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent
 } from "react";
@@ -27,6 +28,11 @@ export type MindMapTreeData = {
   position?: { x: number; y: number };
   width?: number;
   side?: "left" | "right";
+  fontSize?: number;
+  fontColor?: string;
+  fontWeight?: 400 | 500 | 600 | 700 | 800;
+  mergeSourceIds?: string[];
+  extraTargetIds?: string[];
 };
 
 type TreeNode = MindMapTreeData;
@@ -48,6 +54,16 @@ const ROOT_NODE_WIDTH = 286;
 const ROOT_NODE_HEIGHT = 82;
 const COLUMN_GAP = 104;
 const ROW_GAP = 28;
+const MIND_MAP_TEXT_COLORS = [
+  { label: "默认", value: "#f7f7f8" },
+  { label: "红", value: "#ef4444" },
+  { label: "黄", value: "#facc15" },
+  { label: "蓝", value: "#3b82f6" },
+  { label: "绿", value: "#22c55e" },
+  { label: "青", value: "#06b6d4" },
+  { label: "橙", value: "#f97316" },
+  { label: "紫", value: "#a855f7" }
+] as const;
 
 function getNodeSize(depth: number, customWidth?: number) {
   return {
@@ -95,14 +111,19 @@ export function ResearchMindMapModal({
   );
   const originalTreeRef = useRef<TreeNode>(cloneTree(originalTree));
   const [tree, setTree] = useState<TreeNode>(() => cloneTree(originalTree));
-  const baseMap = useMemo(() => layoutTree(tree), [tree]);
+  const baseMap = useMemo(() => positionMergeNodes(layoutTree(tree)), [tree]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const canvasDragRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const selectionDragRef = useRef<{ x: number; y: number; additive: boolean } | null>(null);
   const nodeDragRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const nodeResizeRef = useRef<{ id: string; startX: number; startWidth: number; direction: 1 | -1 } | null>(null);
+  const connectionDragRef = useRef<{ sourceId: string; startX: number; startY: number } | null>(null);
   const nextNodeIdRef = useRef(1);
   const undoHistoryRef = useRef<TreeNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectionRect, setSelectionRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [connectionPreview, setConnectionPreview] = useState<{ x: number; y: number; targetId: string | null } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dropIntent, setDropIntent] = useState<DropIntent | null>(null);
@@ -123,7 +144,7 @@ export function ResearchMindMapModal({
     moveNodeInTree(draft, draggingId, dropIntent);
     return draft;
   }, [draggingId, dropIntent, tree]);
-  const map = useMemo(() => layoutTree(previewTree), [previewTree]);
+  const map = useMemo(() => positionMergeNodes(layoutTree(previewTree)), [previewTree]);
   const changes = useMemo(() => compareTrees(originalTreeRef.current, tree), [tree]);
 
   useEffect(() => {
@@ -160,12 +181,43 @@ export function ResearchMindMapModal({
     if (!previous) return;
     setTree(previous);
     setSelectedId(null);
+    setSelectedIds([]);
     setEditingId(null);
     setDropIntent(null);
     setDraggingId(null);
   }
 
-  function makeNode(label = "新节点") {
+  function selectNode(nodeId: string, additive = false) {
+    setSelectedId(nodeId);
+    setSelectedIds((current) => additive
+      ? current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId]
+      : [nodeId]);
+  }
+
+  function updateSelectedTypography(patch: Pick<TreeNode, "fontSize" | "fontColor" | "fontWeight">) {
+    if (!selectedIds.length) return;
+    mutateTree((draft) => selectedIds.forEach((id) => Object.assign(findNode(draft, id) || {}, patch)));
+  }
+
+  function groupSelectedNodes() {
+    if (selectedIds.length < 2) return;
+    const parentIds = selectedIds.map((id) => findParent(tree, id)?.id || null);
+    if (!parentIds[0] || parentIds.some((id) => id !== parentIds[0])) return;
+    const group = makeNode("合集节点");
+    group.mergeSourceIds = [...selectedIds];
+    mutateTree((draft) => {
+      // A collection is a downstream convergence node: selected nodes stay in
+      // place and collectively point to the new node on their next level.
+      const firstSelected = findNode(draft, selectedIds[0]);
+      if (!firstSelected) return;
+      firstSelected.children.push(group);
+    });
+    setSelectedId(group.id);
+    setSelectedIds([group.id]);
+    setEditingId(group.id);
+  }
+
+  function makeNode(label = "新节点"): TreeNode {
     return { id: `added-${Date.now()}-${nextNodeIdRef.current++}`, label, children: [] };
   }
 
@@ -266,6 +318,23 @@ export function ResearchMindMapModal({
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const connectionDrag = connectionDragRef.current;
+    if (connectionDrag) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const x = (event.clientX - rect.left - pan.x) / scale;
+      const y = (event.clientY - rect.top - pan.y) / scale;
+      const target = findConnectionTarget(baseMap.nodes, connectionDrag.sourceId, x, y);
+      setConnectionPreview({ x, y, targetId: target?.id || null });
+      return;
+    }
+    const selection = selectionDragRef.current;
+    if (selection) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const x = (event.clientX - rect.left - pan.x) / scale;
+      const y = (event.clientY - rect.top - pan.y) / scale;
+      setSelectionRect({ x: Math.min(selection.x, x), y: Math.min(selection.y, y), width: Math.abs(x - selection.x), height: Math.abs(y - selection.y) });
+      return;
+    }
     const resize = nodeResizeRef.current;
     if (resize) {
       const width = Math.max(120, Math.min(520, resize.startWidth + ((event.clientX - resize.startX) / scale) * resize.direction));
@@ -307,6 +376,45 @@ export function ResearchMindMapModal({
   }
 
   function finishPointerInteraction() {
+    if (connectionDragRef.current) {
+      const connectionDrag = connectionDragRef.current;
+      const moved = connectionPreview
+        ? Math.hypot(connectionPreview.x - connectionDrag.startX, connectionPreview.y - connectionDrag.startY)
+        : 0;
+      if (moved < 10) addChild(connectionDrag.sourceId);
+      else if (connectionPreview?.targetId) {
+        const targetId = connectionPreview.targetId;
+        mutateTree((draft) => {
+          const source = findNode(draft, connectionDrag.sourceId);
+          if (!source || source.id === targetId) return;
+          const target = findNode(draft, targetId);
+          if (!target) return;
+          const sourceParent = findParent(draft, source.id);
+          const targetParent = findParent(draft, target.id);
+          const alreadyTreeConnected = sourceParent?.id === target.id || targetParent?.id === source.id;
+          const alreadyMerged = Boolean(source.mergeSourceIds?.includes(target.id) || target.mergeSourceIds?.includes(source.id));
+          const alreadyExtraConnected = Boolean(source.extraTargetIds?.includes(target.id) || target.extraTargetIds?.includes(source.id));
+          if (alreadyTreeConnected || alreadyMerged || alreadyExtraConnected) return;
+          source.extraTargetIds = [...new Set([...(source.extraTargetIds || []), targetId])];
+        });
+      }
+      connectionDragRef.current = null;
+      setConnectionPreview(null);
+      return;
+    }
+    if (selectionDragRef.current) {
+      if (selectionRect) {
+        const hits = map.nodes.filter((node) => {
+          const size = getNodeSize(node.depth, node.width);
+          return node.x < selectionRect.x + selectionRect.width && node.x + size.width > selectionRect.x && node.y < selectionRect.y + selectionRect.height && node.y + size.height > selectionRect.y;
+        }).map((node) => node.id);
+        setSelectedIds((current) => selectionDragRef.current?.additive ? [...new Set([...current, ...hits])] : hits);
+        setSelectedId(hits.at(-1) || null);
+      }
+      selectionDragRef.current = null;
+      setSelectionRect(null);
+      return;
+    }
     if (nodeResizeRef.current) {
       nodeResizeRef.current = null;
       return;
@@ -322,6 +430,12 @@ export function ResearchMindMapModal({
           };
         });
       }
+    } else if (nodeDrag && findNode(tree, nodeDrag.id)?.mergeSourceIds?.length && Math.hypot(dragOffset.x, dragOffset.y) > 2) {
+      const sourceNode = baseMap.nodes.find((node) => node.id === nodeDrag.id);
+      if (sourceNode) detachNode(nodeDrag.id, {
+        x: Math.max(0, sourceNode.x + dragOffset.x),
+        y: Math.max(0, sourceNode.y + dragOffset.y)
+      });
     } else if (nodeDrag && dropIntent) {
       moveNode(nodeDrag.id, dropIntent);
     } else if (nodeDrag && Math.hypot(dragOffset.x, dragOffset.y) > 110) {
@@ -413,7 +527,7 @@ export function ResearchMindMapModal({
     }];
     zip.file("content.json", JSON.stringify(content));
     zip.file("metadata.json", JSON.stringify({
-      creator: { name: "Perdesign AI", version: "1.0.4" },
+      creator: { name: "Perdesign AI", version: "1.0.5" },
       activeSheetId: sheetId
     }));
     zip.file("manifest.json", JSON.stringify({
@@ -445,6 +559,38 @@ export function ResearchMindMapModal({
             <span>双击编辑 · 选中后拖拽端点调节宽度 · 拖拽调整层级与顺序 · Ctrl/⌘ + Z 撤销 · Tab 添加子节点 · Enter 添加同级 · Del 删除</span>
           </div>
           <div className="research-mindmap-actions">
+            {selectedIds.length ? (
+              <div className="research-mindmap-type-tools" aria-label="节点字体工具">
+                <button
+                  type="button"
+                  className={selectedIds.every((id) => findNode(tree, id)?.fontWeight === 800) ? "active" : ""}
+                  onClick={() => updateSelectedTypography({ fontWeight: selectedIds.every((id) => findNode(tree, id)?.fontWeight === 800) ? 400 : 800 })}
+                  title="切换加粗"
+                ><Bold className="h-4 w-4" /></button>
+                <select
+                  aria-label="字号"
+                  value={findNode(tree, selectedId || "")?.fontSize || 12}
+                  onChange={(event) => updateSelectedTypography({ fontSize: Number(event.target.value) })}
+                >
+                  {[10, 11, 12, 14, 16, 18, 20, 24].map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+                <div className="research-mindmap-color-swatches" aria-label="字体颜色">
+                  {MIND_MAP_TEXT_COLORS.map((color) => (
+                    <button
+                      key={color.value}
+                      type="button"
+                      className={(findNode(tree, selectedId || "")?.fontColor || "#f7f7f8") === color.value ? "selected" : ""}
+                      style={{ "--swatch-color": color.value } as CSSProperties}
+                      onClick={() => updateSelectedTypography({ fontColor: color.value })}
+                      title={color.label}
+                      aria-label={`${color.label}色字体`}
+                    />
+                  ))}
+                </div>
+                {selectedIds.length > 1 ? <button type="button" onClick={groupSelectedNodes} title="创建合集节点"><FolderPlus className="h-4 w-4" /></button> : null}
+                <small>{selectedIds.length} 个节点</small>
+              </div>
+            ) : null}
             <button type="button" onClick={() => setZoom(scale - 0.12)} title="缩小"><Minus className="h-4 w-4" /></button>
             <span>{Math.round(scale * 100)}%</span>
             <button type="button" onClick={() => setZoom(scale + 0.12)} title="放大"><Plus className="h-4 w-4" /></button>
@@ -474,15 +620,31 @@ export function ResearchMindMapModal({
             ref={svgRef}
             className="research-mindmap-svg"
             onPointerDown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.button === 1 || event.button === 2) {
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                canvasDragRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+                return;
+              }
               if (event.button !== 0) return;
-              setSelectedId(null);
+              if (!event.shiftKey) {
+                setSelectedId(null);
+                setSelectedIds([]);
+              }
               setEditingId(null);
               event.currentTarget.setPointerCapture(event.pointerId);
-              canvasDragRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+              const rect = event.currentTarget.getBoundingClientRect();
+              selectionDragRef.current = {
+                x: (event.clientX - rect.left - pan.x) / scale,
+                y: (event.clientY - rect.top - pan.y) / scale,
+                additive: event.shiftKey
+              };
             }}
             onPointerMove={handlePointerMove}
             onPointerUp={finishPointerInteraction}
             onPointerCancel={finishPointerInteraction}
+            onContextMenu={(event) => event.preventDefault()}
             onDoubleClick={(event) => {
               if (event.target !== event.currentTarget) return;
               event.preventDefault();
@@ -499,23 +661,60 @@ export function ResearchMindMapModal({
           >
             <g transform={`translate(${pan.x} ${pan.y}) scale(${scale})`}>
               {map.edges.map((edge) => {
+                if (map.nodes.find((node) => node.id === edge.childId)?.mergeSourceIds?.length) return null;
                 const draggedId = draggingId;
-                const internalDraggedEdge = draggedId && (edge.parentId === draggedId || isDescendant(tree, draggedId, edge.parentId));
-                const detachedRootEdge = draggedId && edge.childId === draggedId && !internalDraggedEdge;
-                const isPreviewConnection = Boolean(detachedRootEdge && dropIntent);
+                const parentDragged = Boolean(draggedId && (edge.parentId === draggedId || isDescendant(tree, draggedId, edge.parentId)));
+                const childDragged = Boolean(draggedId && (edge.childId === draggedId || isDescendant(tree, draggedId, edge.childId)));
+                const parentNode = (parentDragged ? baseMap : map).nodes.find((node) => node.id === edge.parentId);
+                const childNode = (childDragged ? baseMap : map).nodes.find((node) => node.id === edge.childId);
+                if (!parentNode || !childNode) return null;
+                const livePath = buildLiveConnectionPath(
+                  parentNode,
+                  childNode,
+                  parentDragged ? dragOffset : { x: 0, y: 0 },
+                  childDragged ? dragOffset : { x: 0, y: 0 }
+                );
                 return (
                   <path
                     key={edge.id}
-                    d={edge.path}
+                    d={livePath}
                     fill="none"
-                    stroke={isPreviewConnection ? "rgba(168,156,255,.48)" : "rgba(168,156,255,.28)"}
-                    strokeWidth={isPreviewConnection ? 1.8 : 1.5}
-                    strokeDasharray={isPreviewConnection ? "6 6" : undefined}
-                    opacity={detachedRootEdge && !isPreviewConnection ? 0 : 1}
-                    transform={internalDraggedEdge ? `translate(${dragOffset.x} ${dragOffset.y})` : undefined}
+                    stroke="rgba(168,156,255,.28)"
+                    strokeWidth="1.5"
+                    pointerEvents="none"
                   />
                 );
               })}
+              {map.nodes.flatMap((target) => {
+                if (!target.mergeSourceIds?.length) return [];
+                const targetDragged = Boolean(draggingId && (target.id === draggingId || isDescendant(tree, draggingId, target.id)));
+                const liveTarget = (targetDragged ? baseMap : map).nodes.find((node) => node.id === target.id) || target;
+                const targetOffset = targetDragged ? dragOffset : { x: 0, y: 0 };
+                return target.mergeSourceIds.map((sourceId) => {
+                  const sourceDragged = Boolean(draggingId && (sourceId === draggingId || isDescendant(tree, draggingId, sourceId)));
+                  const source = (sourceDragged ? baseMap : map).nodes.find((candidate) => candidate.id === sourceId);
+                  if (!source) return null;
+                  const livePath = buildLiveConnectionPath(source, liveTarget, sourceDragged ? dragOffset : { x: 0, y: 0 }, targetOffset);
+                  return <path key={`merge-${sourceId}-${target.id}`} d={livePath} fill="none" stroke="rgba(168,156,255,.34)" strokeWidth="1.5" pointerEvents="none" />;
+                });
+              })}
+              {map.nodes.flatMap((source) => (source.extraTargetIds || []).map((targetId) => {
+                const target = map.nodes.find((node) => node.id === targetId);
+                if (!target) return null;
+                return <path key={`extra-${source.id}-${targetId}`} d={buildLiveConnectionPath(source, target, { x: 0, y: 0 }, { x: 0, y: 0 })} fill="none" stroke="rgba(168,156,255,.34)" strokeWidth="1.5" pointerEvents="none" />;
+              }))}
+              {connectionDragRef.current && connectionPreview ? (() => {
+                const source = baseMap.nodes.find((node) => node.id === connectionDragRef.current?.sourceId);
+                if (!source) return null;
+                const sourceSize = getNodeSize(source.depth, source.width);
+                const startX = source.side === "left" ? source.x : source.x + sourceSize.width;
+                const startY = source.y + getNodeAnchorY(source.depth, sourceSize.height);
+                const target = connectionPreview.targetId ? baseMap.nodes.find((node) => node.id === connectionPreview.targetId) : null;
+                const endX = target ? (target.side === "left" ? target.x + getNodeSize(target.depth, target.width).width : target.x) : connectionPreview.x;
+                const endY = target ? target.y + getNodeAnchorY(target.depth, getNodeSize(target.depth, target.width).height) : connectionPreview.y;
+                const bend = (startX + endX) / 2;
+                return <path d={`M ${startX} ${startY} C ${bend} ${startY}, ${bend} ${endY}, ${endX} ${endY}`} fill="none" stroke="rgba(138,194,255,.8)" strokeWidth="2" strokeDasharray="6 5" pointerEvents="none" />;
+              })() : null}
               {draggingId && dropIntent ? (() => {
                 const placeholder = map.nodes.find((node) => node.id === draggingId);
                 if (!placeholder) return null;
@@ -535,6 +734,7 @@ export function ResearchMindMapModal({
                   />
                 );
               })() : null}
+              {selectionRect ? <rect {...selectionRect} fill="rgba(139,121,255,.09)" stroke="rgba(154,139,255,.7)" strokeWidth="1.5" strokeDasharray="6 5" pointerEvents="none" /> : null}
               {map.nodes.map((previewNode) => {
                 const isDraggedSubtree = Boolean(
                   draggingId && (previewNode.id === draggingId || isDescendant(tree, draggingId, previewNode.id))
@@ -546,7 +746,7 @@ export function ResearchMindMapModal({
                 <NodeView
                   key={node.id}
                   node={node}
-                  selected={selectedId === node.id}
+                  selected={selectedIds.includes(node.id)}
                   editing={editingId === node.id}
                   dropMode={dropIntent?.targetId === node.id ? dropIntent.mode : null}
                   animatePosition={!isDraggedSubtree}
@@ -556,9 +756,9 @@ export function ResearchMindMapModal({
                       ? dragOffset
                       : { x: 0, y: 0 }
                   }
-                  onSelect={() => setSelectedId(node.id)}
+                  onSelect={(additive) => selectNode(node.id, additive)}
                   onEdit={() => {
-                    setSelectedId(node.id);
+                    selectNode(node.id);
                     setEditingId(node.id);
                   }}
                   onLabelChange={(label) => {
@@ -569,6 +769,15 @@ export function ResearchMindMapModal({
                   }}
                   onFinishEditing={() => setEditingId(null)}
                   onAdd={() => addChild(node.id)}
+                  onConnectionStart={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    const size = getNodeSize(node.depth, node.width);
+                    const startX = node.side === "left" ? node.x : node.x + size.width;
+                    const startY = node.y + getNodeAnchorY(node.depth, size.height);
+                    connectionDragRef.current = { sourceId: node.id, startX, startY };
+                    setConnectionPreview({ x: startX, y: startY, targetId: null });
+                  }}
                   onResizeStart={(event) => {
                     event.stopPropagation();
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -583,7 +792,7 @@ export function ResearchMindMapModal({
                   onDragStart={(event) => {
                     event.stopPropagation();
                     event.currentTarget.setPointerCapture(event.pointerId);
-                    setSelectedId(node.id);
+                    selectNode(node.id, event.shiftKey);
                     nodeDragRef.current = { id: node.id, x: event.clientX, y: event.clientY };
                     setDraggingId(node.id);
                   }}
@@ -611,6 +820,7 @@ function NodeView({
   onLabelChange,
   onFinishEditing,
   onAdd,
+  onConnectionStart,
   onResizeStart,
   onDragStart
 }: {
@@ -620,11 +830,12 @@ function NodeView({
   dropMode: DropIntent["mode"] | null;
   animatePosition: boolean;
   offset: { x: number; y: number };
-  onSelect: () => void;
+  onSelect: (additive: boolean) => void;
   onEdit: () => void;
   onLabelChange: (label: string) => void;
   onFinishEditing: () => void;
   onAdd: () => void;
+  onConnectionStart: (event: ReactPointerEvent<SVGGElement>) => void;
   onResizeStart: (event: ReactPointerEvent<SVGGElement>) => void;
   onDragStart: (event: ReactPointerEvent<SVGGElement>) => void;
 }) {
@@ -642,7 +853,7 @@ function NodeView({
       onPointerDown={onDragStart}
       onClick={(event) => {
         event.stopPropagation();
-        onSelect();
+        onSelect(event.shiftKey);
       }}
       onDoubleClick={(event) => {
         event.stopPropagation();
@@ -676,6 +887,11 @@ function NodeView({
         <foreignObject x="0" y="0" width={size.width} height={size.height}>
           <input
             className="research-mindmap-inline-input"
+            style={{
+              color: node.fontColor || "#f7f7f8",
+              fontSize: `${node.fontSize || (node.depth === 0 ? 14 : node.depth === 1 ? 12.5 : 11.5)}px`,
+              fontWeight: node.fontWeight || (node.depth === 0 ? 700 : node.depth === 1 ? 600 : 500)
+            }}
             value={node.label}
             autoFocus
             onPointerDown={(event) => event.stopPropagation()}
@@ -699,10 +915,10 @@ function NodeView({
           y={isLineNode ? lineY - 12 - ((lines.length - 1) * 17) : size.height / 2 - ((lines.length - 1) * 9)}
           textAnchor={isLineNode ? (node.side === "left" ? "end" : "start") : "middle"}
           dominantBaseline="middle"
-          fill="#f7f7f8"
+          fill={node.fontColor || "#f7f7f8"}
           fontFamily="ui-sans-serif,system-ui,sans-serif"
-          fontSize={node.depth === 0 ? 14 : node.depth === 1 ? 12.5 : 11.5}
-          fontWeight={node.depth === 0 ? 700 : node.depth === 1 ? 600 : 500}
+          fontSize={node.fontSize || (node.depth === 0 ? 14 : node.depth === 1 ? 12.5 : 11.5)}
+          fontWeight={node.fontWeight || (node.depth === 0 ? 700 : node.depth === 1 ? 600 : 500)}
           pointerEvents="none"
         >
           {lines.map((line, index) => <tspan key={`${line}-${index}`} x={isLineNode ? textX : size.width / 2} dy={index ? 17 : 0}>{line}</tspan>)}
@@ -723,11 +939,8 @@ function NodeView({
         <g
           transform={`translate(${node.side === "left" ? -13 : size.width + 13} ${getNodeAnchorY(node.depth, size.height)})`}
           className="research-mindmap-node-add"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onAdd();
-          }}
+          onPointerDown={onConnectionStart}
+          onClick={(event) => event.stopPropagation()}
         >
           <circle r="11" fill="#302b48" stroke="rgba(183,170,255,.62)" />
           <path d="M -4 0 H 4 M 0 -4 V 4" stroke="#e8e4ff" strokeWidth="1.5" />
@@ -865,6 +1078,53 @@ function layoutTree(root: TreeNode) {
     width: Math.max(...nodes.map((node) => node.x + getNodeSize(node.depth, node.width).width), ROOT_NODE_WIDTH) + 28,
     height: Math.max(...nodes.map((node) => node.y + getNodeSize(node.depth).height), ROOT_NODE_HEIGHT) + 28
   };
+}
+
+function positionMergeNodes<T extends ReturnType<typeof layoutTree>>(map: T): T {
+  const byId = new Map(map.nodes.map((node) => [node.id, node]));
+  const nodes = map.nodes.map((node) => {
+    if (!node.mergeSourceIds?.length || node.detached || node.position) return node;
+    const sources = node.mergeSourceIds.map((id) => byId.get(id)).filter((source): source is LayoutNode => Boolean(source));
+    if (!sources.length) return node;
+    const centers = sources.map((source) => source.y + getNodeSize(source.depth, source.width).height / 2);
+    const targetHeight = getNodeSize(node.depth, node.width).height;
+    return { ...node, y: centers.reduce((sum, value) => sum + value, 0) / centers.length - targetHeight / 2 };
+  });
+  return {
+    ...map,
+    nodes,
+    height: Math.max(map.height, ...nodes.map((node) => node.y + getNodeSize(node.depth, node.width).height + 28))
+  };
+}
+
+function buildLiveConnectionPath(
+  source: LayoutNode,
+  target: LayoutNode,
+  sourceOffset: { x: number; y: number },
+  targetOffset: { x: number; y: number }
+) {
+  const sourceSize = getNodeSize(source.depth, source.width);
+  const targetSize = getNodeSize(target.depth, target.width);
+  const travelsLeft = target.x + targetOffset.x < source.x + sourceOffset.x;
+  const startX = source.x + sourceOffset.x + (travelsLeft ? 0 : sourceSize.width);
+  const endX = target.x + targetOffset.x + (travelsLeft ? targetSize.width : 0);
+  const startY = source.y + sourceOffset.y + getNodeAnchorY(source.depth, sourceSize.height);
+  const endY = target.y + targetOffset.y + getNodeAnchorY(target.depth, targetSize.height);
+  const bend = (startX + endX) / 2;
+  return `M ${startX} ${startY} C ${bend} ${startY}, ${bend} ${endY}, ${endX} ${endY}`;
+}
+
+function findConnectionTarget(nodes: LayoutNode[], sourceId: string, x: number, y: number) {
+  return nodes
+    .filter((node) => node.id !== sourceId)
+    .map((node) => {
+      const size = getNodeSize(node.depth, node.width);
+      const dx = x < node.x ? node.x - x : x > node.x + size.width ? x - node.x - size.width : 0;
+      const dy = y < node.y ? node.y - y : y > node.y + size.height ? y - node.y - size.height : 0;
+      return { node, distance: Math.hypot(dx, dy) };
+    })
+    .filter((entry) => entry.distance <= 42)
+    .sort((a, b) => a.distance - b.distance)[0]?.node || null;
 }
 
 function mirrorEdgePath(path: string, axisX: number) {

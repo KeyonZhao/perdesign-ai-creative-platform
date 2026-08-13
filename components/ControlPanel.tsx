@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
+import { Check, ChevronDown, Loader2, Maximize2, RotateCcw, Sparkles, Wand2, X } from "lucide-react";
 import { sizeOptions } from "@/lib/models";
 import type { GenerationStatus, ProductInputMode, UploadedImage } from "@/lib/types";
 import { ImageUploader } from "./ImageUploader";
@@ -121,6 +121,9 @@ type ControlPanelProps = {
 };
 
 export function ControlPanel(props: ControlPanelProps) {
+  const requirementRef = useRef<HTMLTextAreaElement | null>(null);
+  const expandedRequirementRef = useRef<HTMLTextAreaElement | null>(null);
+  const [isRequirementExpanded, setIsRequirementExpanded] = useState(false);
   const busy = props.status === "generating" || props.status === "optimizing";
   const canGenerate = Boolean(props.canGenerate && !busy);
   const canOptimize = Boolean(
@@ -129,6 +132,23 @@ export function ControlPanel(props: ControlPanelProps) {
     props.uploadedImage ||
     props.referenceImages.length
   );
+
+  useEffect(() => {
+    const textarea = requirementRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 128), 232)}px`;
+  }, [props.requirement]);
+
+  useEffect(() => {
+    if (!isRequirementExpanded) return;
+    expandedRequirementRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsRequirementExpanded(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [isRequirementExpanded]);
 
   return (
     <div className="design-panel flex h-full min-h-0 flex-col">
@@ -208,6 +228,16 @@ export function ControlPanel(props: ControlPanelProps) {
               ) : null}
               <button
                 type="button"
+                className="btn-secondary flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-40"
+                onClick={() => setIsRequirementExpanded(true)}
+                disabled={busy}
+                title="展开编辑"
+                aria-label="展开编辑文字描述"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
                 className="btn-secondary flex h-8 items-center gap-2 rounded-md px-2.5 text-xs disabled:opacity-40"
                 onClick={props.onOptimize}
                 disabled={!props.hasChatConfig || !canOptimize || busy}
@@ -218,13 +248,49 @@ export function ControlPanel(props: ControlPanelProps) {
             </div>
           </div>
           <textarea
-            className="field min-h-32 resize-y px-3 py-3 text-sm leading-6"
+            ref={requirementRef}
+            className="field design-requirement-textarea min-h-32 px-3 py-3 text-sm leading-6"
             value={props.requirement}
             onChange={(event) => props.setRequirement(event.target.value)}
             placeholder="例如：不改变原有结构比例，优化外观细节，提升科技感和高级感，增加更强的品牌识别特征，KeyShot真实产品渲染质感。"
           />
           {!props.hasChatConfig ? <p className="text-xs leading-5 text-amber-200/80">当前未完成认证，暂时无法使用 AI 撰写提示词。</p> : null}
         </label>
+
+        {isRequirementExpanded ? (
+          <div className="design-prompt-editor-backdrop" role="presentation" onMouseDown={() => setIsRequirementExpanded(false)}>
+            <section
+              className="design-prompt-editor"
+              role="dialog"
+              aria-modal="true"
+              aria-label="展开编辑文字描述"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <header>
+                <div>
+                  <strong>文字描述</strong>
+                  <span>完整描述产品外观、结构、材质与呈现要求</span>
+                </div>
+                <button type="button" onClick={() => setIsRequirementExpanded(false)} title="关闭" aria-label="关闭展开编辑">
+                  <X className="h-4 w-4" />
+                </button>
+              </header>
+              <textarea
+                ref={expandedRequirementRef}
+                value={props.requirement}
+                onChange={(event) => props.setRequirement(event.target.value)}
+                placeholder="描述产品外观、结构、材质、配色、使用场景和渲染要求……"
+              />
+              <footer>
+                <span>{props.requirement.length} 字</span>
+                <div>
+                  <button type="button" className="btn-secondary" onClick={() => props.setRequirement("")}>清空</button>
+                  <button type="button" className="btn-primary" onClick={() => setIsRequirementExpanded(false)}>完成</button>
+                </div>
+              </footer>
+            </section>
+          </div>
+        ) : null}
 
         <div className="space-y-3">
           <div className="flex items-center justify-between">
