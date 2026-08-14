@@ -786,6 +786,17 @@ export function VentEditor() {
                   onChange={(value) => patch("maskFit", value as MaskFit)}
                 />
                 <RangeField
+                  label="蒙版尺寸"
+                  value={Math.round(maskScale * 100)}
+                  min={15}
+                  max={400}
+                  suffix="%"
+                  onChange={(value) => {
+                    setMaskScale(value / 100);
+                    setMaskSelected(true);
+                  }}
+                />
+                <RangeField
                   label="内容识别阈值"
                   value={params.maskThreshold}
                   min={1}
@@ -804,7 +815,7 @@ export function VentEditor() {
                   />
                 ) : null}
                 <ToggleField label="反向识别内容与背景" checked={params.maskInvert} onChange={(value) => patch("maskInvert", value)} />
-                <p className="vent-control-note">调整阈值可收紧或扩大图片内容的识别范围。</p>
+                <p className="vent-control-note">拖动蒙版可调整位置；使用尺寸滑杆或将鼠标放在蒙版上滚动，可缩放蒙版。调整阈值可收紧或扩大内容识别范围。</p>
               </>
             ) : null}
           </ControlSection>
