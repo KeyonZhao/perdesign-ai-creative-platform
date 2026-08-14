@@ -3218,6 +3218,8 @@ textarea {
   height: 100%;
   cursor: grab;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .research-mindmap-svg:active {
@@ -3226,6 +3228,10 @@ textarea {
 
 .research-mindmap-node {
   cursor: grab;
+}
+
+.research-mindmap-connection {
+  cursor: pointer;
 }
 
 .research-mindmap-node:active {
@@ -3251,7 +3257,12 @@ textarea {
   cursor: pointer;
 }
 
-.research-mindmap-node-resize {
+.research-mindmap-group-add {
+  cursor: pointer;
+  filter: drop-shadow(0 6px 14px rgba(93, 70, 210, 0.28));
+}
+
+.research-mindmap-node-resize-edge {
   cursor: ew-resize;
 }
 
@@ -3270,6 +3281,8 @@ textarea {
   text-align: center;
   caret-color: #ffffff;
   box-shadow: none;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .research-mindmap-inspector {
