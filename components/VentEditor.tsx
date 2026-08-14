@@ -217,6 +217,10 @@ export function VentEditor() {
     () => (pngMask ? getPngMaskBounds(params, pngMask, maskPosition, maskScale) : null),
     [maskPosition, maskScale, params, pngMask]
   );
+  const maskBaseBounds = useMemo(
+    () => (pngMask ? getPngMaskBounds(params, pngMask, maskPosition, 1) : null),
+    [maskPosition, params, pngMask]
+  );
   const openArea = useMemo(() => holes.reduce((sum, item) => sum + itemArea(item), 0), [holes]);
   const panelArea = useMemo(() => polygonArea(panelOutline), [panelOutline]);
   const openRate = panelArea > 0 ? (openArea / panelArea) * 100 : 0;
@@ -785,17 +789,34 @@ export function VentEditor() {
                   options={maskFitOptions}
                   onChange={(value) => patch("maskFit", value as MaskFit)}
                 />
-                <RangeField
-                  label="蒙版尺寸"
-                  value={Math.round(maskScale * 100)}
-                  min={15}
-                  max={400}
-                  suffix="%"
-                  onChange={(value) => {
-                    setMaskScale(value / 100);
-                    setMaskSelected(true);
-                  }}
-                />
+                {maskBounds && maskBaseBounds ? (
+                  <div className="vent-field-grid">
+                    <NumberField
+                      label="蒙版宽度"
+                      value={Number(maskBounds.width.toFixed(1))}
+                      min={Number((maskBaseBounds.width * 0.15).toFixed(1))}
+                      max={Number((maskBaseBounds.width * 8).toFixed(1))}
+                      step={0.5}
+                      unit="mm"
+                      onChange={(value) => {
+                        setMaskScale(clamp(value / maskBaseBounds.width, 0.15, 8));
+                        setMaskSelected(true);
+                      }}
+                    />
+                    <NumberField
+                      label="蒙版高度"
+                      value={Number(maskBounds.height.toFixed(1))}
+                      min={Number((maskBaseBounds.height * 0.15).toFixed(1))}
+                      max={Number((maskBaseBounds.height * 8).toFixed(1))}
+                      step={0.5}
+                      unit="mm"
+                      onChange={(value) => {
+                        setMaskScale(clamp(value / maskBaseBounds.height, 0.15, 8));
+                        setMaskSelected(true);
+                      }}
+                    />
+                  </div>
+                ) : null}
                 <RangeField
                   label="内容识别阈值"
                   value={params.maskThreshold}
@@ -815,7 +836,7 @@ export function VentEditor() {
                   />
                 ) : null}
                 <ToggleField label="反向识别内容与背景" checked={params.maskInvert} onChange={(value) => patch("maskInvert", value)} />
-                <p className="vent-control-note">拖动蒙版可调整位置；使用尺寸滑杆或将鼠标放在蒙版上滚动，可缩放蒙版。调整阈值可收紧或扩大内容识别范围。</p>
+                <p className="vent-control-note">可直接输入蒙版宽度或高度，另一边会按原始比例联动；也可以将鼠标放在蒙版上滚动缩放。调整阈值可收紧或扩大内容识别范围。</p>
               </>
             ) : null}
           </ControlSection>
