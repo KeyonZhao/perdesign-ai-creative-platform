@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "sourceId": "387a43b77a16",
+      "relative": "assets/user-media/airview-cabinet.png",
+      "kind": "image",
+      "mime": "image/png"
+    },
+    {
+      "sourceId": "4ea7227d9c5f",
+      "relative": "assets/user-media/sleepview-bedroom.png",
+      "kind": "image",
+      "mime": "image/png"
+    },
+    {
+      "sourceId": "aa1561698111",
+      "relative": "assets/user-media/airlens-detail.png",
+      "kind": "image",
+      "mime": "image/png"
+    },
+    {
+      "sourceId": "2e8e682660cf",
+      "relative": "assets/user-media/visible-air-hero.png",
+      "kind": "image",
+      "mime": "image/png"
+    }
+  ]
+}

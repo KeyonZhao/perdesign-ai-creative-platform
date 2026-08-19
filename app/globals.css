@@ -4737,6 +4737,7 @@ textarea {
   display: block;
   width: 100%;
   height: 100%;
+  overflow: visible;
 }
 
 .vent-canvas-svg.point-editing {
@@ -4887,6 +4888,45 @@ textarea {
 .vent-gradient-handle {
   pointer-events: none;
   filter: drop-shadow(0 0 1.4px rgba(91, 67, 255, 0.7));
+}
+
+.vent-gradient-axis {
+  filter: drop-shadow(0 0 2px rgba(91, 67, 255, 0.5));
+}
+
+.vent-gradient-axis-hit {
+  cursor: grab;
+  stroke: transparent;
+  stroke-width: 12;
+  vector-effect: non-scaling-stroke;
+}
+
+.vent-gradient-axis-hit:active {
+  cursor: grabbing;
+}
+
+.vent-gradient-axis-line {
+  pointer-events: none;
+  stroke: url("#vent-gradient-axis-stroke");
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.vent-gradient-axis-point {
+  cursor: move;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.vent-gradient-axis-point.start {
+  fill: #191820;
+  stroke: #ddd7ff;
+}
+
+.vent-gradient-axis-point.end {
+  fill: #654cff;
+  stroke: #e5e0ff;
 }
 
 .skeleton {

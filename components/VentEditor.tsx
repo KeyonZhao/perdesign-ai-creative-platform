@@ -17,7 +17,7 @@ import {
 type HoleShape = "circle" | "rectangle" | "polygon" | "star" | "slot" | "svg";
 type LayoutMode = "grid" | "honeycomb" | "hex-tiling" | "radial" | "spiral" | "fibonacci";
 type PanelShape = "rectangle" | "circle" | "polygon" | "custom";
-type GradientMode = "none" | "radial" | "horizontal" | "vertical" | "diagonal" | "angle" | "wave" | "point";
+type GradientMode = "none" | "line" | "radial" | "horizontal" | "vertical" | "diagonal" | "angle" | "wave" | "point";
 type DensityMode = "none" | "center-dense" | "edge-dense" | "gradient";
 type MaskMode = "only" | "exclude" | "larger" | "smaller";
 type MaskFit = "contain" | "cover" | "stretch";
@@ -85,6 +85,11 @@ type NormalizedPoint = {
   y: number;
 };
 
+type GradientAxis = {
+  start: NormalizedPoint;
+  end: NormalizedPoint;
+};
+
 const MAX_HOLE_COUNT = 120_000;
 
 const defaults: VentParams = {
@@ -146,9 +151,8 @@ const layoutOptions: Array<{ value: LayoutMode; label: string }> = [
 
 const gradientOptions: Array<{ value: GradientMode; label: string }> = [
   { value: "none", label: "无渐变" },
+  { value: "line", label: "画布渐变线" },
   { value: "radial", label: "中心径向" },
-  { value: "horizontal", label: "横向" },
-  { value: "vertical", label: "纵向" },
   { value: "diagonal", label: "对角线" },
   { value: "angle", label: "角度方向" },
   { value: "wave", label: "波浪" },
@@ -178,6 +182,10 @@ const maskFitOptions: Array<{ value: MaskFit; label: string }> = [
 export function VentEditor() {
   const [params, setParams] = useState<VentParams>(defaults);
   const [gradientPoint, setGradientPoint] = useState({ x: 0.5, y: 0.5 });
+  const [gradientAxis, setGradientAxis] = useState<GradientAxis>({
+    start: { x: 0.25, y: 0.5 },
+    end: { x: 0.75, y: 0.5 }
+  });
   const [maskPosition, setMaskPosition] = useState<NormalizedPoint>({ x: 0.5, y: 0.5 });
   const [maskScale, setMaskScale] = useState(1);
   const [maskSelected, setMaskSelected] = useState(false);
@@ -200,6 +208,12 @@ export function VentEditor() {
     startClientY: number;
     startPosition: NormalizedPoint;
   } | null>(null);
+  const gradientAxisDraggingRef = useRef<{
+    kind: "start" | "end" | "line";
+    startClientX: number;
+    startClientY: number;
+    axis: GradientAxis;
+  } | null>(null);
   const svgFileInputRef = useRef<HTMLInputElement | null>(null);
   const panelSvgFileInputRef = useRef<HTMLInputElement | null>(null);
   const pngMaskInputRef = useRef<HTMLInputElement | null>(null);
@@ -209,8 +223,8 @@ export function VentEditor() {
     [importedPanelShape, params]
   );
   const holes = useMemo(
-    () => createHoles(params, gradientPoint, importedSvgShape?.contours, pngMask, maskPosition, maskScale, panelOutline),
-    [gradientPoint, importedSvgShape, maskPosition, maskScale, panelOutline, params, pngMask]
+    () => createHoles(params, gradientPoint, gradientAxis, importedSvgShape?.contours, pngMask, maskPosition, maskScale, panelOutline),
+    [gradientAxis, gradientPoint, importedSvgShape, maskPosition, maskScale, panelOutline, params, pngMask]
   );
   const holePreviewPath = useMemo(() => buildHolePreviewPath(holes), [holes]);
   const maskBounds = useMemo(
@@ -229,6 +243,10 @@ export function VentEditor() {
   const maximumTopMargin = Math.max(0, params.panelHeight - params.marginBottom - 0.5);
   const maximumBottomMargin = Math.max(0, params.panelHeight - params.marginTop - 0.5);
   const holeDensity = densityLevelFromParams(params);
+  const gradientAxisAngle = normalizeDegrees(Math.atan2(
+    (gradientAxis.end.y - gradientAxis.start.y) * params.panelHeight,
+    (gradientAxis.end.x - gradientAxis.start.x) * params.panelWidth
+  ) * 180 / Math.PI);
 
   useEffect(() => {
     if (!marginSelected) return;
@@ -269,7 +287,8 @@ export function VentEditor() {
     setParams((current) => ({
       ...current,
       gradient: value,
-      gradientMax: value === "none" ? current.gradientMax : current.holeSize
+      gradientMax: value === "none" ? current.gradientMax : current.holeSize,
+      reverseGradient: value === "line" ? false : current.reverseGradient
     }));
   }
 
@@ -431,6 +450,89 @@ export function VentEditor() {
       x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
       y: clamp((event.clientY - rect.top) / rect.height, 0, 1)
     });
+  }
+
+  function startGradientAxisDragging(
+    event: React.PointerEvent<SVGGElement | SVGCircleElement | SVGLineElement>,
+    kind: "start" | "end" | "line"
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    gradientAxisDraggingRef.current = {
+      kind,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      axis: gradientAxis
+    };
+  }
+
+  function dragGradientAxis(event: React.PointerEvent<SVGGElement>) {
+    const drag = gradientAxisDraggingRef.current;
+    const svg = previewRef.current;
+    if (!drag || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const dx = (event.clientX - drag.startClientX) / rect.width;
+    const dy = (event.clientY - drag.startClientY) / rect.height;
+    if (drag.kind === "start" || drag.kind === "end") {
+      const moving = {
+        x: drag.axis[drag.kind].x + dx,
+        y: drag.axis[drag.kind].y + dy
+      };
+      const anchor = drag.axis[drag.kind === "start" ? "end" : "start"];
+      const physicalDx = (moving.x - anchor.x) * params.panelWidth;
+      const physicalDy = (moving.y - anchor.y) * params.panelHeight;
+      const distance = Math.hypot(physicalDx, physicalDy);
+      const rawAngle = Math.atan2(physicalDy, physicalDx);
+      const snapStep = Math.PI / 4;
+      const snappedAngle = Math.round(rawAngle / snapStep) * snapStep;
+      const snapThreshold = 4 * Math.PI / 180;
+      const angularDifference = Math.abs(Math.atan2(Math.sin(rawAngle - snappedAngle), Math.cos(rawAngle - snappedAngle)));
+      const angle = angularDifference <= snapThreshold ? snappedAngle : rawAngle;
+      const nextPoint = distance > 0
+        ? {
+            x: anchor.x + Math.cos(angle) * distance / params.panelWidth,
+            y: anchor.y + Math.sin(angle) * distance / params.panelHeight
+          }
+        : moving;
+      setGradientAxis({
+        ...drag.axis,
+        [drag.kind]: nextPoint
+      });
+      return;
+    }
+    setGradientAxis({
+      start: { x: drag.axis.start.x + dx, y: drag.axis.start.y + dy },
+      end: { x: drag.axis.end.x + dx, y: drag.axis.end.y + dy }
+    });
+  }
+
+  function updateGradientAxisAngle(value: number) {
+    const radians = normalizeDegrees(value) * Math.PI / 180;
+    const center = {
+      x: (gradientAxis.start.x + gradientAxis.end.x) / 2,
+      y: (gradientAxis.start.y + gradientAxis.end.y) / 2
+    };
+    const length = Math.hypot(
+      (gradientAxis.end.x - gradientAxis.start.x) * params.panelWidth,
+      (gradientAxis.end.y - gradientAxis.start.y) * params.panelHeight
+    );
+    const halfX = Math.cos(radians) * length / 2 / params.panelWidth;
+    const halfY = Math.sin(radians) * length / 2 / params.panelHeight;
+    setGradientAxis({
+      start: { x: center.x - halfX, y: center.y - halfY },
+      end: { x: center.x + halfX, y: center.y + halfY }
+    });
+  }
+
+  function stopGradientAxisDragging(event: React.PointerEvent<SVGGElement>) {
+    if (!gradientAxisDraggingRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    gradientAxisDraggingRef.current = null;
   }
 
   function marginFromPointer(event: React.PointerEvent<SVGGElement>, side = marginDraggingSideRef.current) {
@@ -935,8 +1037,25 @@ export function VentEditor() {
             {params.gradient !== "none" ? (
               <>
                 <div className="vent-field-grid">
-                  <NumberField label="最小尺寸" value={params.gradientMin} min={0.1} step={0.5} unit="mm" onChange={(value) => patch("gradientMin", value)} />
-                  <NumberField label="最大尺寸" value={params.gradientMax} min={0.1} step={0.5} unit="mm" onChange={updateGradientMaximum} />
+                  <NumberField
+                    label={params.gradient === "line" ? "起点尺寸" : "最小尺寸"}
+                    value={params.gradient === "line" ? params.gradientMax : params.gradientMin}
+                    min={0.1}
+                    step={0.5}
+                    unit="mm"
+                    onChange={params.gradient === "line" ? updateGradientMaximum : (value) => patch("gradientMin", value)}
+                  />
+                  <NumberField
+                    label={params.gradient === "line" ? "终点尺寸" : "最大尺寸"}
+                    value={params.gradient === "line" ? params.gradientMin : params.gradientMax}
+                    min={0.1}
+                    step={0.5}
+                    unit="mm"
+                    onChange={params.gradient === "line" ? (value) => patch("gradientMin", value) : updateGradientMaximum}
+                  />
+                  {params.gradient === "line" ? (
+                    <NumberField label="渐变线角度" value={gradientAxisAngle} step={1} unit="°" onChange={updateGradientAxisAngle} />
+                  ) : null}
                   {params.gradient === "angle" ? (
                     <NumberField label="渐变角度" value={params.gradientAngle} step={5} unit="°" onChange={(value) => patch("gradientAngle", value)} />
                   ) : null}
@@ -947,7 +1066,10 @@ export function VentEditor() {
                     </>
                   ) : null}
                 </div>
-                <ToggleField label="反向渐变" checked={params.reverseGradient} onChange={(value) => patch("reverseGradient", value)} />
+                {params.gradient !== "line" ? (
+                  <ToggleField label="反向渐变" checked={params.reverseGradient} onChange={(value) => patch("reverseGradient", value)} />
+                ) : null}
+                {params.gradient === "line" ? <p className="vent-control-note">拖动渐变线可整体移动；拖动端点可旋转并改变范围，接近 0°、45°、90° 等关键角度时会自动吸附。渐变线允许超出面板。</p> : null}
                 {params.gradient === "point" ? <p className="vent-control-note">点击右侧画布可移动渐变中心。</p> : null}
               </>
             ) : null}
@@ -1052,6 +1174,19 @@ export function VentEditor() {
                   updateGradientPoint(event);
                 }}
               >
+                <defs>
+                  <linearGradient
+                    id="vent-gradient-axis-stroke"
+                    gradientUnits="userSpaceOnUse"
+                    x1={gradientAxis.start.x * params.panelWidth}
+                    y1={gradientAxis.start.y * params.panelHeight}
+                    x2={gradientAxis.end.x * params.panelWidth}
+                    y2={gradientAxis.end.y * params.panelHeight}
+                  >
+                    <stop offset="0%" stopColor="#d8d1ff" />
+                    <stop offset="100%" stopColor="#654cff" />
+                  </linearGradient>
+                </defs>
                 <polygon points={pointsAttribute(panelOutline)} fill="none" stroke="#74747c" strokeWidth={0.45} />
                 {pngMask && maskBounds ? (
                   <g
@@ -1119,6 +1254,46 @@ export function VentEditor() {
                   />
                 </g>
                 <path d={holePreviewPath} fill="#8b8b93" pointerEvents="none" />
+                {params.gradient === "line" ? (
+                  <g
+                    className="vent-gradient-axis"
+                    role="group"
+                    aria-label="尺寸渐变线，拖动线可移动，拖动两端可旋转和调整范围"
+                    onPointerMove={dragGradientAxis}
+                    onPointerUp={stopGradientAxisDragging}
+                    onPointerCancel={stopGradientAxisDragging}
+                  >
+                    <line
+                      className="vent-gradient-axis-hit"
+                      x1={gradientAxis.start.x * params.panelWidth}
+                      y1={gradientAxis.start.y * params.panelHeight}
+                      x2={gradientAxis.end.x * params.panelWidth}
+                      y2={gradientAxis.end.y * params.panelHeight}
+                      onPointerDown={(event) => startGradientAxisDragging(event, "line")}
+                    />
+                    <line
+                      className="vent-gradient-axis-line"
+                      x1={gradientAxis.start.x * params.panelWidth}
+                      y1={gradientAxis.start.y * params.panelHeight}
+                      x2={gradientAxis.end.x * params.panelWidth}
+                      y2={gradientAxis.end.y * params.panelHeight}
+                    />
+                    <circle
+                      className="vent-gradient-axis-point start"
+                      cx={gradientAxis.start.x * params.panelWidth}
+                      cy={gradientAxis.start.y * params.panelHeight}
+                      r={Math.min(params.panelWidth, params.panelHeight) * 0.022}
+                      onPointerDown={(event) => startGradientAxisDragging(event, "start")}
+                    />
+                    <circle
+                      className="vent-gradient-axis-point end"
+                      cx={gradientAxis.end.x * params.panelWidth}
+                      cy={gradientAxis.end.y * params.panelHeight}
+                      r={Math.min(params.panelWidth, params.panelHeight) * 0.022}
+                      onPointerDown={(event) => startGradientAxisDragging(event, "end")}
+                    />
+                  </g>
+                ) : null}
                 {pngMask && (maskSnapAxes.x || maskSnapAxes.y) ? (
                   <g className="vent-mask-snap-guides" aria-hidden="true">
                     {maskSnapAxes.x ? (
@@ -1853,7 +2028,113 @@ function cleanImportedContour(points: Array<[number, number]>) {
     const [lastX, lastY] = deduplicated[deduplicated.length - 1];
     if (Math.hypot(firstX - lastX, firstY - lastY) < 1e-7) deduplicated.pop();
   }
-  return deduplicated.length >= 3 ? deduplicated : [];
+  return deduplicated.length >= 3 ? restoreSampledContourCorners(deduplicated) : [];
+}
+
+function restoreSampledContourCorners(points: Array<[number, number]>) {
+  if (points.length < 4) return points;
+  const bounds = outlineBounds(points);
+  const diagonal = Math.hypot(bounds.width, bounds.height);
+  const tolerance = Math.max(1e-7, diagonal * 1e-5);
+  const sourceSteps = points.map((point, index) => pointDistance(point, points[(index + 1) % points.length])).filter((value) => value > tolerance);
+  const sortedSteps = [...sourceSteps].sort((a, b) => a - b);
+  const samplingStep = sortedSteps[Math.floor(sortedSteps.length / 2)] || 0;
+  let result = removeClosedContourCollinearPoints(points, tolerance);
+
+  // Uniform getPointAtLength sampling often places one point immediately
+  // before and after a sharp SVG vertex. The DXF then contains a tiny false
+  // bevel. Rebuild only sampling-sized bevels by intersecting their two long
+  // neighbouring straight segments.
+  for (let pass = 0; pass < 8 && result.length >= 4; pass += 1) {
+    let repaired = false;
+    for (let index = 0; index < result.length; index += 1) {
+      const previous = result[(index - 1 + result.length) % result.length];
+      const first = result[index];
+      const secondIndex = (index + 1) % result.length;
+      const second = result[secondIndex];
+      const next = result[(index + 2) % result.length];
+      const previousLength = pointDistance(previous, first);
+      const bevelLength = pointDistance(first, second);
+      const nextLength = pointDistance(second, next);
+      if (
+        !samplingStep ||
+        bevelLength > samplingStep * 2.25 ||
+        bevelLength > Math.min(previousLength, nextLength) * 0.28
+      ) continue;
+      const firstTurn = normalizedCross(previous, first, second);
+      const secondTurn = normalizedCross(first, second, next);
+      if (firstTurn < 0.08 || secondTurn < 0.08) continue;
+      const intersection = infiniteLineIntersection(previous, first, second, next);
+      if (!intersection) continue;
+      if (
+        pointDistance(intersection, first) > bevelLength * 2.5 ||
+        pointDistance(intersection, second) > bevelLength * 2.5
+      ) continue;
+
+      if (secondIndex === 0) {
+        result = [intersection, ...result.slice(1, -1)];
+      } else {
+        result.splice(index, 2, intersection);
+      }
+      repaired = true;
+      break;
+    }
+    if (!repaired) break;
+    result = removeClosedContourCollinearPoints(result, tolerance);
+  }
+  return result;
+}
+
+function removeClosedContourCollinearPoints(points: Array<[number, number]>, tolerance: number) {
+  let result = [...points];
+  for (let pass = 0; pass < 6 && result.length > 3; pass += 1) {
+    const filtered = result.filter((point, index) => {
+      const previous = result[(index - 1 + result.length) % result.length];
+      const next = result[(index + 1) % result.length];
+      const span = pointDistance(previous, next);
+      if (span <= tolerance) return false;
+      const distance = Math.abs(
+        (next[0] - previous[0]) * (previous[1] - point[1]) -
+        (previous[0] - point[0]) * (next[1] - previous[1])
+      ) / span;
+      const forward = (point[0] - previous[0]) * (next[0] - point[0]) + (point[1] - previous[1]) * (next[1] - point[1]);
+      return distance > tolerance || forward < 0;
+    });
+    if (filtered.length === result.length || filtered.length < 3) break;
+    result = filtered;
+  }
+  return result;
+}
+
+function pointDistance(first: [number, number], second: [number, number]) {
+  return Math.hypot(second[0] - first[0], second[1] - first[1]);
+}
+
+function normalizedCross(first: [number, number], vertex: [number, number], last: [number, number]) {
+  const incomingX = vertex[0] - first[0];
+  const incomingY = vertex[1] - first[1];
+  const outgoingX = last[0] - vertex[0];
+  const outgoingY = last[1] - vertex[1];
+  const denominator = Math.hypot(incomingX, incomingY) * Math.hypot(outgoingX, outgoingY);
+  return denominator ? Math.abs(incomingX * outgoingY - incomingY * outgoingX) / denominator : 0;
+}
+
+function infiniteLineIntersection(
+  firstStart: [number, number],
+  firstEnd: [number, number],
+  secondStart: [number, number],
+  secondEnd: [number, number]
+) {
+  const firstX = firstEnd[0] - firstStart[0];
+  const firstY = firstEnd[1] - firstStart[1];
+  const secondX = secondEnd[0] - secondStart[0];
+  const secondY = secondEnd[1] - secondStart[1];
+  const denominator = firstX * secondY - firstY * secondX;
+  if (Math.abs(denominator) < 1e-10) return null;
+  const offsetX = secondStart[0] - firstStart[0];
+  const offsetY = secondStart[1] - firstStart[1];
+  const factor = (offsetX * secondY - offsetY * secondX) / denominator;
+  return [firstStart[0] + factor * firstX, firstStart[1] + factor * firstY] as [number, number];
 }
 
 function normalizeImportedContours(contours: Array<Array<[number, number]>>) {
@@ -1881,6 +2162,7 @@ function normalizeImportedContours(contours: Array<Array<[number, number]>>) {
 function createHoles(
   params: VentParams,
   point: { x: number; y: number },
+  gradientAxis: GradientAxis,
   svgContours?: Array<Array<[number, number]>>,
   pngMask?: PngMask | null,
   maskPosition: NormalizedPoint = { x: 0.5, y: 0.5 },
@@ -1894,7 +2176,7 @@ function createHoles(
 
   candidates.slice(0, MAX_HOLE_COUNT).forEach((candidate) => {
     const rotated = rotateAroundCenter(candidate.x, candidate.y, params, degrees(params.layoutRotation));
-    const gradient = gradientValue(rotated.x, rotated.y, params, point);
+    const gradient = gradientValue(rotated.x, rotated.y, params, point, gradientAxis);
     if (!densityKeep(rotated.x, rotated.y, candidate.row, candidate.column, gradient, params)) return;
     const insideMask = pngMask ? pointInsidePngMask(rotated.x, rotated.y, params, pngMask, maskPosition, maskScale) : false;
     if (pngMask && params.maskMode === "only" && !insideMask) return;
@@ -2106,13 +2388,31 @@ function transformImportedContours(
   ] as [number, number]));
 }
 
-function gradientValue(x: number, y: number, params: VentParams, point: { x: number; y: number }) {
+function gradientValue(
+  x: number,
+  y: number,
+  params: VentParams,
+  point: { x: number; y: number },
+  gradientAxis: GradientAxis
+) {
   if (params.gradient === "none") return 1;
   const width = params.panelWidth;
   const height = params.panelHeight;
   let value = 1;
 
-  if (params.gradient === "radial") {
+  if (params.gradient === "line") {
+    const startX = gradientAxis.start.x * width;
+    const startY = gradientAxis.start.y * height;
+    const endX = gradientAxis.end.x * width;
+    const endY = gradientAxis.end.y * height;
+    const axisX = endX - startX;
+    const axisY = endY - startY;
+    const lengthSquared = axisX * axisX + axisY * axisY;
+    const progress = lengthSquared
+      ? clamp(((x - startX) * axisX + (y - startY) * axisY) / lengthSquared, 0, 1)
+      : 0;
+    return 1 - progress;
+  } else if (params.gradient === "radial") {
     const distance = Math.hypot(x - width / 2, y - height / 2);
     value = 1 - clamp(distance / Math.hypot(width / 2, height / 2) * 1.4, 0, 1);
   } else if (params.gradient === "horizontal") {
@@ -2395,6 +2695,10 @@ function degrees(value: number) {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeDegrees(value: number) {
+  return ((value % 360) + 360) % 360;
 }
 
 function fitMarginPair(first: number, second: number, dimension: number): [number, number] {

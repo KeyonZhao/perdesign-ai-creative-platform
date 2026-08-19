@@ -1,0 +1,460 @@
+{
+  "title": "海信空气感知屏空调创新策划案",
+  "goal": "面向海信甲方管理与产品团队，阐明空调屏幕存在的正当性，提出空气可视化产品定义、柜机与挂机差异化方案，并形成可落地的产品路线",
+  "audience": "海信空调甲方管理层、产品、设计与市场团队",
+  "owner": "创新策划团队",
+  "randomSeed": "hisense-air-screen-20260817-k7m",
+  "pageCount": 11,
+  "themePack": "theme01",
+  "slides": [
+    {
+      "layout": "theme01_page002",
+      "props": {
+        "enKicker": "AIR EXPERIENCE",
+        "titleTop": "海信空气感知屏",
+        "titleBottom": "空调创新策划案",
+        "subtitle": "让看不见的好空气，被看见、被理解、被管理",
+        "pills": [
+          "空气可视化",
+          "高端体验",
+          "产品创新"
+        ],
+        "meta": "甲方提案 · 2026",
+        "footnote": "从大屏硬件，走向家庭空气管理界面",
+        "pillCount": 3
+      }
+    },
+    {
+      "layout": "theme01_page047",
+      "props": {
+        "kicker": "项目关键判断",
+        "quote": "不是给空调加一块屏，而是让空调成为家庭空气管理终端。",
+        "contrastWord": "不是娱乐大屏",
+        "highlightWord": "而是空气界面",
+        "attribution": "创新策划核心结论",
+        "caption": "屏幕的价值，在于把不可见的空气能力变成可感知体验。",
+        "notes": [
+          {
+            "label": "长期有用"
+          },
+          {
+            "label": "高端可信"
+          }
+        ],
+        "noteCount": 2
+      }
+    },
+    {
+      "layout": "theme01_page011",
+      "props": {
+        "kicker": "机会窗口",
+        "partLabel": "WHY NOW",
+        "index": "01",
+        "title": "窗口已经出现",
+        "en": "AIR BECOMES VISIBLE",
+        "desc": "家电正在从执行命令转向理解状态；空调的高端能力却仍被藏在机器内部。",
+        "topics": [
+          {
+            "label": "体验竞争"
+          },
+          {
+            "label": "健康关注"
+          },
+          {
+            "label": "AI 决策"
+          },
+          {
+            "label": "全屋互联"
+          },
+          {
+            "label": "显示优势"
+          }
+        ],
+        "caption": "率先定义“屏幕为何存在”，比率先做大屏更重要。",
+        "images": [
+          "assets/user-media/visible-air-hero.png",
+          "assets/user-media/airlens-detail.png"
+        ],
+        "imageSlotCount": 2,
+        "topicCount": 5
+      }
+    },
+    {
+      "layout": "theme01_page066",
+      "props": {
+        "kicker": "先避开三条错路",
+        "title": "大屏不等于高端",
+        "en": "VALUE BEFORE SIZE",
+        "cn": "用户需要价值，不是屏幕面积",
+        "cornerLabel": "方向 / 价值",
+        "dims": [
+          "日常价值",
+          "空气相关",
+          "高端感",
+          "低打扰",
+          "可持续"
+        ],
+        "rows": [
+          {
+            "name": "娱乐终端",
+            "tag": "错位",
+            "scores": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          },
+          {
+            "name": "放大遥控器",
+            "tag": "重复",
+            "scores": [
+              1,
+              2,
+              1,
+              2,
+              1
+            ]
+          },
+          {
+            "name": "炫技装饰",
+            "tag": "短期",
+            "scores": [
+              1,
+              1,
+              2,
+              1,
+              1
+            ]
+          },
+          {
+            "name": "空气状态屏",
+            "tag": "有效",
+            "scores": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ]
+          },
+          {
+            "name": "空气管理终端",
+            "tag": "推荐",
+            "scores": [
+              3,
+              3,
+              3,
+              3,
+              3
+            ]
+          }
+        ],
+        "legend": [
+          "1 弱",
+          "2 中",
+          "3 强",
+          "推荐方向"
+        ],
+        "caption": "高端感来自克制、可信和持续有用，而不是更亮、更大、更热闹。",
+        "rowCount": 5,
+        "dimCount": 5
+      }
+    },
+    {
+      "layout": "theme01_page082",
+      "props": {
+        "kicker": "核心产品定义",
+        "lines": [
+          [
+            {
+              "t": "让看不见的"
+            },
+            {
+              "t": "好空气",
+              "mark": "highlight"
+            },
+            {
+              "t": "被看见"
+            }
+          ],
+          [
+            {
+              "t": "让复杂的"
+            },
+            {
+              "t": "空气参数",
+              "mark": "highlight"
+            },
+            {
+              "t": "变简单"
+            }
+          ]
+        ],
+        "sub": "海信空气感知屏：呈现空气状态，解释 AI 调节逻辑，管理家庭舒适场景。",
+        "stats": [
+          {
+            "value": "看见",
+            "label": "空气状态"
+          },
+          {
+            "value": "理解",
+            "label": "调节逻辑"
+          },
+          {
+            "value": "选择",
+            "label": "舒适方案"
+          }
+        ],
+        "caption": "屏幕从显示参数，升级为解释价值。",
+        "statCount": 3
+      }
+    },
+    {
+      "layout": "theme01_page029",
+      "props": {
+        "kicker": "屏幕只做三件事",
+        "title": "价值闭环，而非功能堆叠",
+        "en": "SEE · THINK · CARE",
+        "cn": "看得懂、会建议、能陪伴",
+        "points": [
+          {
+            "h": "看见空气",
+            "d": "把温湿度、洁净度、新风和气流翻译成一眼可懂的舒适状态。"
+          },
+          {
+            "h": "AI 给建议",
+            "d": "根据人群、时间与环境主动推荐方案，让用户少调节、空调多理解。"
+          },
+          {
+            "h": "持续被照顾",
+            "d": "用空气记录、维护提醒与全屋联动，让高端价值长期可见。"
+          }
+        ],
+        "caption": "每一项屏幕能力，都必须直接服务空气体验。",
+        "imageSlotCount": 0,
+        "pointCount": 3
+      }
+    },
+    {
+      "layout": "theme01_page043",
+      "props": {
+        "kicker": "空间决定屏幕策略",
+        "title": "一大一小，一明一隐",
+        "en": "TWO SPACES · TWO EXPERIENCES",
+        "left": {
+          "tag": "客厅柜机",
+          "en": "AIRVIEW",
+          "stat": "中枢",
+          "unit": "大屏",
+          "statLabel": "展示 + 管理"
+        },
+        "right": {
+          "tag": "卧室挂机",
+          "en": "SLEEPVIEW",
+          "stat": "隐退",
+          "unit": "小屏",
+          "statLabel": "安心 + 不打扰"
+        },
+        "verdict": "客厅让空气成为视觉主角，卧室让科技主动退场。",
+        "caption": "柜机与挂机不复制同一套大屏逻辑。",
+        "images": [
+          "assets/user-media/airview-cabinet.png",
+          "assets/user-media/sleepview-bedroom.png"
+        ],
+        "imageSlotCount": 2
+      }
+    },
+    {
+      "layout": "theme01_page025",
+      "props": {
+        "kicker": "三种产品概念",
+        "title": "从旗舰识别到系列化落地",
+        "en": "THREE PRODUCT DIRECTIONS",
+        "cn": "覆盖客厅、卧室与高端家居融合",
+        "companies": [
+          {
+            "name": "AirView",
+            "role": "家庭空气中枢屏"
+          },
+          {
+            "name": "SleepView",
+            "role": "睡眠空气屏"
+          },
+          {
+            "name": "AirLens",
+            "role": "隐形空气光幕"
+          }
+        ],
+        "attributes": [
+          {
+            "label": "核心空间",
+            "values": [
+              "客厅",
+              "卧室",
+              "全屋系列"
+            ]
+          },
+          {
+            "label": "屏幕形态",
+            "values": [
+              "纵向大屏",
+              "隐显小屏",
+              "半透光幕"
+            ]
+          },
+          {
+            "label": "核心价值",
+            "values": [
+              "总览管理",
+              "睡眠守护",
+              "家居融合"
+            ]
+          },
+          {
+            "label": "优先产品",
+            "values": [
+              "旗舰柜机",
+              "高端挂机",
+              "高端套系"
+            ]
+          }
+        ],
+        "caption": "建议以 AirView 建立认知，以 SleepView 扩大场景，以 AirLens 沉淀家族语言。",
+        "imageSlotCount": 0,
+        "rowCount": 4
+      }
+    },
+    {
+      "layout": "theme01_page040",
+      "props": {
+        "kicker": "落地路线",
+        "title": "先证明价值，再形成系列",
+        "en": "FROM HERO TO SYSTEM",
+        "cn": "旗舰引领、主销验证、家族扩展",
+        "phases": [
+          {
+            "period": "阶段 1",
+            "step": "旗舰定义",
+            "heading": "AirView 柜机",
+            "points": [
+              "建立空气可视化体验",
+              "打造门店强演示样机"
+            ],
+            "verdict": "抢认知"
+          },
+          {
+            "period": "阶段 2",
+            "step": "主销验证",
+            "heading": "SleepView 挂机",
+            "points": [
+              "验证睡眠低打扰价值",
+              "沉淀用户反馈与算法"
+            ],
+            "verdict": "跑体验"
+          },
+          {
+            "period": "阶段 3",
+            "step": "系列扩展",
+            "heading": "AirLens 家族",
+            "points": [
+              "形成三档配置体系",
+              "联动新风净化除湿"
+            ],
+            "verdict": "建资产"
+          }
+        ],
+        "caption": "硬件只是入口，真正的壁垒是空气状态语言与场景系统。",
+        "itemCount": 3
+      }
+    },
+    {
+      "layout": "theme01_page038",
+      "props": {
+        "kicker": "四个关键风险",
+        "title": "让创新可卖、可用、可信",
+        "en": "RISK CONTROL",
+        "cn": "每个风险都有明确设计边界",
+        "risks": [
+          {
+            "title": "噱头感",
+            "en": "GIMMICK",
+            "chain": [
+              "只讲大屏",
+              "价值模糊",
+              "用户质疑",
+              "溢价失败"
+            ],
+            "impact": "所有功能和传播必须围绕空气体验。"
+          },
+          {
+            "title": "成本压力",
+            "en": "COST",
+            "chain": [
+              "硬件增加",
+              "成本上升",
+              "感知不足",
+              "转化受阻"
+            ],
+            "impact": "旗舰先行，分三档配置承接不同价格带。"
+          },
+          {
+            "title": "夜间打扰",
+            "en": "DISTURBANCE",
+            "chain": [
+              "屏幕过亮",
+              "影响睡眠",
+              "负面口碑",
+              "关闭功能"
+            ],
+            "impact": "自动调光、入睡隐退，并支持完全关闭。"
+          },
+          {
+            "title": "数据失信",
+            "en": "TRUST",
+            "chain": [
+              "感知误差",
+              "体感冲突",
+              "信任下降",
+              "价值坍塌"
+            ],
+            "impact": "表达趋势与建议，传感校准和算法必须可靠。"
+          }
+        ],
+        "caption": "屏幕越显眼，越必须克制；信息越智能，越必须可解释。",
+        "chainCount": 4
+      }
+    },
+    {
+      "layout": "theme01_page083",
+      "props": {
+        "kicker": "最终建议",
+        "title": "抢占空气可视化",
+        "en": "OWN THE CATEGORY",
+        "cn": "不做“大屏空调”，定义新的产品语言",
+        "takeaways": [
+          {
+            "tag": "产品",
+            "en": "PRODUCT",
+            "text": "把屏幕定义为空气状态与舒适决策界面。"
+          },
+          {
+            "tag": "体验",
+            "en": "EXPERIENCE",
+            "text": "柜机做中枢，挂机做低打扰睡眠屏。"
+          },
+          {
+            "tag": "品牌",
+            "en": "BRAND",
+            "text": "用显示科技，让海信把好空气讲清楚。"
+          }
+        ],
+        "summary": "建议以 AirView 旗舰柜机启动概念验证，并同步建立空气状态语言、门店演示与三档产品配置。",
+        "bandLabel": "看见好空气",
+        "caption": "海信空气感知屏空调 · 下一代家庭空气界面",
+        "takeawayCount": 3
+      }
+    }
+  ]
+}
