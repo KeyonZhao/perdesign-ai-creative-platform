@@ -3239,14 +3239,18 @@ function ResearchMarkdown({
   }
 
   const imagesByBlock = new Map<number, ResearchWebImage[]>();
-  (images || []).forEach((image, imageIndex) => {
+  (images || []).forEach((image) => {
     const sourceIndex = webSources.findIndex((source) => source.url === image.sourceUrl);
     const citationOffset = sourceIndex >= 0 ? content.indexOf(`[W${sourceIndex + 1}]`) : -1;
-    const proportionalIndex = citationOffset >= 0 && content.length
+    // Do not force an image into the document unless the answer actually cites
+    // the page it came from. This keeps loosely related search imagery out of
+    // unrelated sections and also cleans up older persisted conversations.
+    if (citationOffset < 0) return;
+    const proportionalIndex = content.length
       ? Math.floor((citationOffset / content.length) * Math.max(blocks.length, 1))
-      : Math.floor(((imageIndex + 1) / ((images?.length || 0) + 1)) * Math.max(blocks.length, 1));
+      : 0;
     const blockIndex = Math.max(0, Math.min(blocks.length - 1, proportionalIndex));
-    imagesByBlock.set(blockIndex, [...(imagesByBlock.get(blockIndex) || []), image]);
+    if (!imagesByBlock.has(blockIndex)) imagesByBlock.set(blockIndex, [image]);
   });
 
   const interleaved: ReactNode[] = [];

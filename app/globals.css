@@ -6769,8 +6769,8 @@ textarea {
 }
 
 .research-inline-figure {
-  width: min(100%, 640px);
-  margin: 18px 0 24px;
+  width: min(100%, 360px);
+  margin: 12px 0 18px;
 }
 
 .research-inline-figure a {
@@ -6784,14 +6784,15 @@ textarea {
 .research-inline-figure img {
   display: block;
   width: 100%;
-  max-height: 420px;
+  height: auto;
+  max-height: 210px;
   object-fit: contain;
   background: #111217;
 }
 
 .research-inline-figure figcaption {
-  padding-top: 7px;
+  padding-top: 6px;
   color: rgba(230, 230, 236, 0.52);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
 }
