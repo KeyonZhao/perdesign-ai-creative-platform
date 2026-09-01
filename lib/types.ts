@@ -47,7 +47,13 @@ export type DivergenceStyleId =
   | "industrial-rugged"
   | "future-sci-fi";
 
+export type DivergenceMode = "free" | "directed";
+export type DivergenceExplorationLevel = "steady" | "balanced" | "bold";
+
 export type CreativeDivergenceRequest = {
+  mode?: DivergenceMode;
+  explorationLevel?: DivergenceExplorationLevel;
+  note?: string;
   styleIds?: DivergenceStyleId[];
   referenceImage?: GenerationSourceImage;
   referenceWeight?: number;

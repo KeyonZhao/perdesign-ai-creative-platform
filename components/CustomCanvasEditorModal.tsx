@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, ChevronUp, Clapperboard, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { downloadDataUrl, getGalleryDraggedImage } from "@/lib/image";
-import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage, VideoGenerationRequest } from "@/lib/types";
+import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceExplorationLevel, DivergenceMode, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage, VideoGenerationRequest } from "@/lib/types";
 import { ImageSizeSelect } from "./ControlPanel";
 import { ImageUploader } from "./ImageUploader";
 import { VideoGenerationPanel } from "./VideoGenerationPanel";
@@ -71,13 +71,16 @@ export function CustomCanvasEditorModal({
   const [promptBeforeOptimization, setPromptBeforeOptimization] = useState<string | null>(null);
   const [awaitingAuthorization, setAwaitingAuthorization] = useState(false);
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
+  const [divergenceMode, setDivergenceMode] = useState<DivergenceMode>("free");
+  const [divergenceExplorationLevel, setDivergenceExplorationLevel] = useState<DivergenceExplorationLevel>("balanced");
+  const [divergenceNote, setDivergenceNote] = useState("");
   const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
   const [isVideoPanelOpen, setIsVideoPanelOpen] = useState(false);
   const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
   const [divergenceReference, setDivergenceReference] = useState<GenerationSourceImage | undefined>();
   const [divergenceUploadError, setDivergenceUploadError] = useState("");
-  const busy = status === "generating" || isOptimizing;
+  const busy = status === "generating" || status === "optimizing" || isOptimizing;
 
   function keepEcommercePanelOpen() {
     if (ecommercePanelCloseTimerRef.current !== null) {
@@ -249,10 +252,13 @@ export function CustomCanvasEditorModal({
 
   function submitDivergence() {
     const request = getCurrentRequest();
-    if (!request || busy || (!divergenceStyleIds.length && !divergenceReference)) return;
+    if (!request || busy || (divergenceMode === "directed" && !divergenceStyleIds.length && !divergenceReference)) return;
     onGenerateDivergence(request, {
-      styleIds: divergenceStyleIds,
-      referenceImage: divergenceReference
+      mode: divergenceMode,
+      explorationLevel: divergenceMode === "free" ? divergenceExplorationLevel : undefined,
+      note: divergenceMode === "free" ? divergenceNote.trim() : undefined,
+      styleIds: divergenceMode === "directed" ? divergenceStyleIds : undefined,
+      referenceImage: divergenceMode === "directed" ? divergenceReference : undefined
     });
   }
 
@@ -474,8 +480,8 @@ export function CustomCanvasEditorModal({
           <section className="divergence-panel" aria-label="创意发散设置">
             <div className="divergence-panel-heading">
               <div>
-                <strong>创意风格</strong>
-                <span>已选 {divergenceStyleIds.length}/4，或上传风格参考图</span>
+                <strong>创意发散</strong>
+                <span>{divergenceMode === "free" ? "AI 分析当前方案并寻找 4 条高价值路线" : `已选 ${divergenceStyleIds.length}/4，或上传风格参考图`}</span>
               </div>
               <button
                 type="button"
@@ -487,6 +493,24 @@ export function CustomCanvasEditorModal({
                 <ChevronUp className="h-4 w-4" />
               </button>
             </div>
+
+            <div className="divergence-mode-switch" role="group" aria-label="探索模式">
+              <button type="button" className={divergenceMode === "free" ? "selected" : ""} onClick={() => setDivergenceMode("free")}>自由探索</button>
+              <button type="button" className={divergenceMode === "directed" ? "selected" : ""} onClick={() => setDivergenceMode("directed")}>指定探索</button>
+            </div>
+
+            {divergenceMode === "free" ? (
+              <div className="divergence-free-settings">
+                <p>无需先想方向。大脑模型会阅读当前方案，自动规划四条有价值且互不重复的设计路线。</p>
+                <div className="divergence-level-grid" role="group" aria-label="探索幅度">
+                  {([['steady', '稳妥延展'], ['balanced', '明显突破'], ['bold', '大胆探索']] as const).map(([value, label]) => (
+                    <button key={value} type="button" className={divergenceExplorationLevel === value ? "selected" : ""} onClick={() => setDivergenceExplorationLevel(value)}>{label}</button>
+                  ))}
+                </div>
+                <textarea className="divergence-note" value={divergenceNote} onChange={(event) => setDivergenceNote(event.target.value.slice(0, 500))} placeholder="补充边界（可选），例如：不要改变操作方式、希望更轻便" rows={3} />
+              </div>
+            ) : (
+              <>
 
             <div className="divergence-style-grid" role="group" aria-label="创意风格多选">
               {DIVERGENCE_STYLES.map((style) => {
@@ -567,15 +591,17 @@ export function CustomCanvasEditorModal({
             )}
 
             {divergenceUploadError ? <p className="divergence-upload-error">{divergenceUploadError}</p> : null}
+              </>
+            )}
 
             <button
               type="button"
               className="divergence-submit"
               onClick={submitDivergence}
-              disabled={busy || (!divergenceStyleIds.length && !divergenceReference)}
+              disabled={busy || (divergenceMode === "directed" && !divergenceStyleIds.length && !divergenceReference)}
             >
               {status === "generating" ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-              <span>{status === "generating" ? "生成中" : "开始创意发散"}</span>
+              <span>{busy ? "生成中" : divergenceMode === "free" ? "开始自由探索" : "开始指定探索"}</span>
             </button>
           </section>
         ) : null}

@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
-import type { CreativeDivergenceRequest, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage, VideoGenerationRequest } from "@/lib/types";
+import type { CreativeDivergenceRequest, DivergenceExplorationLevel, DivergenceMode, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage, VideoGenerationRequest } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
 import { TripoModelViewer } from "./TripoModelViewer";
 import { VideoGenerationPanel } from "./VideoGenerationPanel";
@@ -108,6 +108,9 @@ export function ImagePreviewModal({
   });
   const [ecommerceInstruction, setEcommerceInstruction] = useState("");
   const [isDivergenceOpen, setIsDivergenceOpen] = useState(false);
+  const [divergenceMode, setDivergenceMode] = useState<DivergenceMode>("free");
+  const [divergenceExplorationLevel, setDivergenceExplorationLevel] = useState<DivergenceExplorationLevel>("balanced");
+  const [divergenceNote, setDivergenceNote] = useState("");
   const [divergenceStyleIds, setDivergenceStyleIds] = useState<DivergenceStyleId[]>([]);
   const [divergenceReference, setDivergenceReference] = useState<GenerationSourceImage | undefined>();
   const [divergenceReferenceWeight, setDivergenceReferenceWeight] = useState(50);
@@ -207,6 +210,9 @@ export function ImagePreviewModal({
     });
     setEcommerceInstruction("");
     setIsDivergenceOpen(false);
+    setDivergenceMode("free");
+    setDivergenceExplorationLevel("balanced");
+    setDivergenceNote("");
     setPreviewZoom(1);
     setPreviewPan({ x: 0, y: 0 });
     setIsPreviewPanning(false);
@@ -794,11 +800,14 @@ export function ImagePreviewModal({
   }
 
   function submitDivergence() {
-    if (isGeneratingVariant || (!divergenceStyleIds.length && !divergenceReference)) return;
+    if (isGeneratingVariant || (divergenceMode === "directed" && !divergenceStyleIds.length && !divergenceReference)) return;
     onGenerateDivergence?.(result!, metadata?.productName, {
-      styleIds: divergenceStyleIds,
-      referenceImage: divergenceReference,
-      referenceWeight: divergenceReference ? divergenceReferenceWeight : undefined
+      mode: divergenceMode,
+      explorationLevel: divergenceMode === "free" ? divergenceExplorationLevel : undefined,
+      note: divergenceMode === "free" ? divergenceNote.trim() : undefined,
+      styleIds: divergenceMode === "directed" ? divergenceStyleIds : undefined,
+      referenceImage: divergenceMode === "directed" ? divergenceReference : undefined,
+      referenceWeight: divergenceMode === "directed" && divergenceReference ? divergenceReferenceWeight : undefined
     });
   }
 
@@ -1023,8 +1032,8 @@ export function ImagePreviewModal({
               onClick={keepDivergenceOpen}
               onMouseEnter={keepDivergenceOpen}
               onMouseLeave={scheduleDivergenceClose}
-              disabled={isGeneratingVariant || isEditing || metadata?.generationType === "divergence"}
-              title={metadata?.generationType === "divergence" ? "当前已是创意发散结果" : "创意发散"}
+              disabled={isGeneratingVariant || isEditing}
+              title="创意发散"
               aria-expanded={isDivergenceOpen}
             >
               <Sparkles className="h-4 w-4" />
@@ -1315,8 +1324,8 @@ export function ImagePreviewModal({
           >
             <div className="divergence-panel-heading">
               <div>
-                <strong>创意风格</strong>
-                <span>已选 {divergenceStyleIds.length}/4，或上传风格参考图</span>
+                <strong>创意发散</strong>
+                <span>{divergenceMode === "free" ? "AI 分析当前方案并寻找 4 条高价值路线" : `已选 ${divergenceStyleIds.length}/4，或上传风格参考图`}</span>
               </div>
               <button
                 type="button"
@@ -1328,6 +1337,45 @@ export function ImagePreviewModal({
                 <ChevronUp className="h-4 w-4" />
               </button>
             </div>
+
+            <div className="divergence-mode-switch" role="group" aria-label="探索模式">
+              <button type="button" className={divergenceMode === "free" ? "selected" : ""} onClick={() => setDivergenceMode("free")}>
+                自由探索
+              </button>
+              <button type="button" className={divergenceMode === "directed" ? "selected" : ""} onClick={() => setDivergenceMode("directed")}>
+                指定探索
+              </button>
+            </div>
+
+            {divergenceMode === "free" ? (
+              <div className="divergence-free-settings">
+                <p>无需先想方向。大脑模型会阅读当前方案，自动规划四条有价值且互不重复的设计路线。</p>
+                <div className="divergence-level-grid" role="group" aria-label="探索幅度">
+                  {([
+                    ["steady", "稳妥延展"],
+                    ["balanced", "明显突破"],
+                    ["bold", "大胆探索"]
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={divergenceExplorationLevel === value ? "selected" : ""}
+                      onClick={() => setDivergenceExplorationLevel(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  className="divergence-note"
+                  value={divergenceNote}
+                  onChange={(event) => setDivergenceNote(event.target.value.slice(0, 500))}
+                  placeholder="补充边界（可选），例如：不要改变操作方式、希望更轻便"
+                  rows={3}
+                />
+              </div>
+            ) : (
+              <>
 
             <div className="divergence-style-grid" role="group" aria-label="创意风格多选">
               {DIVERGENCE_STYLES.map((style) => {
@@ -1430,15 +1478,17 @@ export function ImagePreviewModal({
             ) : null}
 
             {divergenceUploadError ? <p className="divergence-upload-error">{divergenceUploadError}</p> : null}
+              </>
+            )}
 
             <button
               type="button"
               className="divergence-submit"
               onClick={submitDivergence}
-              disabled={isGeneratingVariant || (!divergenceStyleIds.length && !divergenceReference) || !onGenerateDivergence}
+              disabled={isGeneratingVariant || (divergenceMode === "directed" && !divergenceStyleIds.length && !divergenceReference) || !onGenerateDivergence}
             >
               {isGeneratingVariant ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-              <span>{isGeneratingVariant ? "生成中" : "开始创意发散"}</span>
+              <span>{isGeneratingVariant ? "生成中" : divergenceMode === "free" ? "开始自由探索" : "开始指定探索"}</span>
             </button>
           </section>
         ) : null}

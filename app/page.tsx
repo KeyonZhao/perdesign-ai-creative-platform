@@ -1332,11 +1332,12 @@ export default function Home() {
     sourceProductName: string | undefined,
     request: CreativeDivergenceRequest
   ) {
+    const mode = request.mode || "directed";
     const selectedStyleCount = new Set(request.styleIds || []).size;
-    if (selectedStyleCount > 4) {
+    if (mode === "directed" && selectedStyleCount > 4) {
       return pushToast("error", "最多选择 4 种创意风格。");
     }
-    if (Boolean(selectedStyleCount) === Boolean(request.referenceImage)) {
+    if (mode === "directed" && Boolean(selectedStyleCount) === Boolean(request.referenceImage)) {
       return pushToast("error", "请选择 1 至 4 种创意风格，或上传一张风格参考图。");
     }
     if (!ensureAuthorized({ type: "divergence", result, productName: sourceProductName, request })) return;
@@ -1349,7 +1350,13 @@ export default function Home() {
     request: CreativeDivergenceRequest = {},
     forceAuthorized = false
   ) {
-    const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
+    const {
+      imageApiKey: resolvedImageApiKey,
+      imageApiBaseUrl: resolvedImageApiBaseUrl,
+      chatApiKey: resolvedChatApiKey,
+      chatApiBaseUrl: resolvedChatApiBaseUrl,
+      unlocked
+    } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
       return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
@@ -1360,20 +1367,52 @@ export default function Home() {
     let exactPrompt: string;
     let divergenceStyles: string[];
     try {
-      const preparedDivergence = buildCreativeDivergencePrompt({
-        productName: resolvedProductName,
-        request
-      });
-      exactPrompt = preparedDivergence.prompt;
-      divergenceStyles = preparedDivergence.quadrantStyleLabels;
+      if ((request.mode || "directed") === "free") {
+        if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) {
+          throw new Error("自由探索需要可用的对话模型配置。");
+        }
+        setPendingGenerationCount(1);
+        setStatus("generating");
+        const sourceImageBase64 = await prepareImageForVision(result.imageBase64, 1600, 0.84);
+        const response = await fetch("/api/divergence-plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: resolvedChatApiKey,
+            baseUrl: resolvedChatApiBaseUrl,
+            model: BRAIN_MODEL,
+            productName: resolvedProductName,
+            sourceImageBase64,
+            explorationLevel: request.explorationLevel || "balanced",
+            note: request.note?.trim() || "",
+            originalDescription: (result.designDescription || result.prompt || "").slice(0, 4000)
+          })
+        });
+        const data = await readApiResponse<{ prompt?: string; concepts?: string[]; error?: string }>(response);
+        if (!response.ok || !data.prompt || data.concepts?.length !== 4) {
+          throw new Error(data.error || "大脑模型没有返回完整的四条探索路线。");
+        }
+        exactPrompt = data.prompt;
+        divergenceStyles = data.concepts;
+      } else {
+        const preparedDivergence = buildCreativeDivergencePrompt({
+          productName: resolvedProductName,
+          request
+        });
+        exactPrompt = preparedDivergence.prompt;
+        divergenceStyles = preparedDivergence.quadrantStyleLabels;
+      }
     } catch (error) {
+      setStatus("error");
       return pushToast("error", error instanceof Error ? error.message : "创意发散参数无效。");
     }
 
     await runGeneration({
       productName: resolvedProductName,
       productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
-      referenceImages: request.referenceImage ? [request.referenceImage] : undefined,
+      referenceImages: (request.mode || "directed") === "directed" && request.referenceImage
+        ? [request.referenceImage]
+        : undefined,
       innovationLevel: 100,
       requirement: exactPrompt,
       count: 1,
@@ -2333,7 +2372,7 @@ export default function Home() {
                     batches={generationBatches}
                     activeBatchId={activeGenerationBatchId}
                     count={status === "generating" ? pendingGenerationCount : count}
-                    isGeneratingVariant={status === "generating"}
+                    isGeneratingVariant={status === "generating" || status === "optimizing"}
                     onGenerateMultiView={generateMultiView}
                     onGenerateScene={generateScene}
                     onGenerateEcommercePoster={generateEcommercePoster}
@@ -2426,7 +2465,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        <span className="app-version" aria-label="当前版本 v1.0.5">v1.0.5</span>
+        <span className="app-version" aria-label="当前版本 v1.0.6">v1.0.6</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}

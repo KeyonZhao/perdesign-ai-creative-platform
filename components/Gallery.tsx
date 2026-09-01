@@ -105,6 +105,7 @@ export function Gallery({
   const generationStartedAtRef = useRef(Date.now());
   const generationSessionBatchIdRef = useRef<string | null>(null);
   const knownResultIdsRef = useRef(new Set(allResults.map((result) => result.id)));
+  const revealTimersRef = useRef(new Map<string, number>());
   const [revealingResultIds, setRevealingResultIds] = useState<string[]>([]);
   const hasPositionedGalleryRef = useRef(false);
   const wasActiveRef = useRef(false);
@@ -132,11 +133,21 @@ export function Gallery({
     if (!idsToReveal.length) return;
 
     setRevealingResultIds((current) => Array.from(new Set([...current, ...idsToReveal])));
-    const timer = window.setTimeout(() => {
-      setRevealingResultIds((current) => current.filter((id) => !idsToReveal.includes(id)));
-    }, 720);
-    return () => window.clearTimeout(timer);
+    idsToReveal.forEach((id) => {
+      const previousTimer = revealTimersRef.current.get(id);
+      if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+      const timer = window.setTimeout(() => {
+        revealTimersRef.current.delete(id);
+        setRevealingResultIds((current) => current.filter((currentId) => currentId !== id));
+      }, 720);
+      revealTimersRef.current.set(id, timer);
+    });
   }, [allResults, batches]);
+
+  useEffect(() => () => {
+    revealTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    revealTimersRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!preview) return;

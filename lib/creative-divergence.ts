@@ -1,5 +1,10 @@
 import type { CreativeDivergenceRequest, DivergenceStyleId } from "./types";
 
+export type FreeExplorationConcept = {
+  concept: string;
+  instruction: string;
+};
+
 export type DivergenceStyleOption = {
   id: DivergenceStyleId;
   label: string;
@@ -132,5 +137,31 @@ export function buildCreativeDivergencePrompt({
     quadrantStyleLabels: request.referenceImage
       ? Array.from({ length: 4 }, () => "风格参考图")
       : quadrantStyles.map((style) => style.label)
+  };
+}
+
+export function buildFreeExplorationPrompt({
+  productName,
+  concepts
+}: {
+  productName?: string;
+  concepts: FreeExplorationConcept[];
+}) {
+  if (concepts.length !== 4) throw new Error("自由探索需要四条完整设计路线。");
+  const quadrantNames = ["左上象限", "右上象限", "左下象限", "右下象限"];
+  const routeInstructions = concepts.map(
+    (concept, index) => `${quadrantNames[index]}｜${concept.concept}：${concept.instruction}`
+  );
+  const prompt = [
+    productName?.trim() ? `产品名称：${productName.trim()}。` : "",
+    "第一张输入图片是当前产品设计方案，也是唯一的产品主体。请严格执行下面已经完成策略分析的四条设计路线，不要自行改题、合并路线或重新选择方向。",
+    ...routeInstructions,
+    "四条路线都必须保留原产品的品类、核心功能、人机关系、必要接口以及最具辨识度的产品家族基因，但应从整体轮廓、比例、主次体块、结构组织、交互方式、细节逻辑与 CMF 形成有真实产品价值的明显差异。差异不能只靠换色、纹理、装饰件或表面贴图。所有方案必须符合真实结构、制造工艺和量产逻辑。",
+    "在一张图中呈现四款完整方案，采用等大的四象限构图：左上、右上、左下、右下各一款。统一尺度、统一三分之四视角、统一摄影棚灯光和干净浅色背景，产品完整显示且互不遮挡，专业工业设计效果图，真实材质，细节清晰。不要分割线、边框、卡片底板、方案代号、标题、说明文字、品牌 Logo、水印或任何字符。"
+  ].filter(Boolean).join("\n");
+
+  return {
+    prompt,
+    quadrantStyleLabels: concepts.map((concept) => concept.concept)
   };
 }
