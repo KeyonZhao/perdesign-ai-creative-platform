@@ -1376,7 +1376,7 @@ export default function Home() {
         setPendingGenerationCount(1);
         setStatus("generating");
         const sourceImageBase64 = await prepareImageForVision(result.imageBase64, 1600, 0.84);
-        const response = await fetch("/api/divergence-plan", {
+        const plannerResponse = await fetch("/api/divergence-plan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1390,12 +1390,26 @@ export default function Home() {
             originalDescription: (result.designDescription || result.prompt || "").slice(0, 4000)
           })
         });
-        const data = await readApiResponse<{ prompt?: string; concepts?: string[]; error?: string }>(response);
-        if (!response.ok || !data.prompt || data.concepts?.length !== 4) {
-          throw new Error(data.error || "大脑模型没有返回完整的四条探索路线。");
+        if (!plannerResponse.ok || !plannerResponse.body) {
+          const plannerError = await readApiResponse<{ error?: string }>(plannerResponse);
+          throw new Error(plannerError.error || "自由探索分析接口暂时不可用。");
         }
-        exactPrompt = data.prompt;
-        divergenceStyles = data.concepts;
+        let plannerPrompt = "";
+        let plannerConcepts: string[] = [];
+        await readDivergencePlannerStream(plannerResponse.body, (event) => {
+          if (event.type === "error") {
+            throw new Error(event.error || "自由探索规划失败，请稍后重试。");
+          }
+          if (event.type === "done") {
+            plannerPrompt = event.prompt || "";
+            plannerConcepts = event.concepts || [];
+          }
+        });
+        if (!plannerPrompt || plannerConcepts.length !== 4) {
+          throw new Error("大脑模型没有返回完整的四条探索路线。");
+        }
+        exactPrompt = plannerPrompt;
+        divergenceStyles = plannerConcepts;
       } else {
         const preparedDivergence = buildCreativeDivergencePrompt({
           productName: resolvedProductName,
@@ -3704,6 +3718,40 @@ type ResearchStreamEvent = {
   images?: ResearchWebImage[];
   error?: string;
 };
+
+type DivergencePlannerStreamEvent = {
+  type: "start" | "delta" | "done" | "error";
+  content?: string;
+  prompt?: string;
+  concepts?: string[];
+  error?: string;
+};
+
+async function readDivergencePlannerStream(
+  stream: ReadableStream<Uint8Array>,
+  onEvent: (event: DivergencePlannerStreamEvent) => void
+) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = done ? "" : lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let event: DivergencePlannerStreamEvent;
+      try {
+        event = JSON.parse(line) as DivergencePlannerStreamEvent;
+      } catch {
+        continue;
+      }
+      onEvent(event);
+    }
+    if (done) break;
+  }
+}
 
 async function readNdjsonStream(
   stream: ReadableStream<Uint8Array>,

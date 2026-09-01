@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { callChatCompletion } from "@/lib/aihubmix";
+import { streamChatCompletion } from "@/lib/aihubmix";
 import { buildFreeExplorationPrompt } from "@/lib/creative-divergence";
 import { resolveProviderConfig } from "@/lib/provider";
 
@@ -39,8 +39,14 @@ function parsePlan(raw: string) {
   return { concepts };
 }
 
-async function repairPlan(raw: string, provider: { apiKey: string; baseUrl: string }, model: string) {
-  return callChatCompletion({
+async function repairPlan(
+  raw: string,
+  provider: { apiKey: string; baseUrl: string },
+  model: string,
+  onDelta: (content: string) => void
+) {
+  let repaired = "";
+  await streamChatCompletion({
     ...provider,
     model,
     temperature: 0.2,
@@ -51,24 +57,32 @@ async function repairPlan(raw: string, provider: { apiKey: string; baseUrl: stri
         content: "把用户提供的工业设计探索结果整理成严格 JSON。必须恰好保留四条实质路线，不要缩减设计信息，不要解释，不要 Markdown。格式：{\"concepts\":[{\"concept\":\"2-8字路线名\",\"instruction\":\"完整设计指令\"}]}"
       },
       { role: "user", content: raw.slice(0, 12000) }
-    ]
+    ],
+    timeoutMs: 60_000
+  }, (content) => {
+    repaired += content;
+    onDelta(content);
   });
+  return repaired;
 }
 
 async function generatePlan(
   payload: z.infer<typeof requestSchema>,
-  provider: { apiKey: string; baseUrl: string }
+  provider: { apiKey: string; baseUrl: string },
+  onDelta: (content: string) => void
 ) {
   const levelInstruction = {
       steady: "稳妥延展：保留较多成熟设计基因，重点寻找可落地且明显优于原方案的变化。",
       balanced: "明显突破：保留核心识别与功能骨架，同时允许重构比例、体块、结构和交互表达。",
       bold: "大胆探索：只守住品类、功能、人机与必要接口，可提出前瞻但仍可制造的新架构。"
   }[payload.explorationLevel];
-  const raw = await callChatCompletion({
+  let raw = "";
+  await streamChatCompletion({
     ...provider,
     model: payload.model,
     temperature: 0.75,
     maxCompletionTokens: 2400,
+    timeoutMs: 110_000,
     messages: [
       {
         role: "system",
@@ -98,12 +112,15 @@ async function generatePlan(
         ]
       }
     ]
+  }, (content) => {
+    raw += content;
+    onDelta(content);
   });
   let plan: ReturnType<typeof parsePlan>;
   try {
     plan = parsePlan(raw);
   } catch {
-    plan = parsePlan(await repairPlan(raw, provider, payload.model));
+    plan = parsePlan(await repairPlan(raw, provider, payload.model, onDelta));
   }
   const prepared = buildFreeExplorationPrompt({ productName: payload.productName, concepts: plan.concepts });
   return { prompt: prepared.prompt, concepts: prepared.quadrantStyleLabels };
@@ -115,24 +132,23 @@ export async function POST(request: Request) {
     const provider = resolveProviderConfig(payload, "chat");
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoder.encode(" "));
-        const heartbeat = setInterval(() => controller.enqueue(encoder.encode(" ")), 4000);
-        void generatePlan(payload, provider)
-          .then((result) => controller.enqueue(encoder.encode(JSON.stringify(result))))
-          .catch((error) => {
-            const message = error instanceof Error ? error.message : "自由探索规划失败，请稍后重试。";
-            controller.enqueue(encoder.encode(JSON.stringify({ error: message })));
-          })
-          .finally(() => {
-            clearInterval(heartbeat);
-            controller.close();
-          });
+      async start(controller) {
+        const send = (value: unknown) => controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`));
+        send({ type: "start" });
+        try {
+          const result = await generatePlan(payload, provider, (content) => send({ type: "delta", content }));
+          send({ type: "done", ...result });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "自由探索规划失败，请稍后重试。";
+          send({ type: "error", error: message });
+        } finally {
+          controller.close();
+        }
       }
     });
     return new Response(stream, {
       headers: {
-        "Content-Type": "application/json; charset=utf-8",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no"
       }
