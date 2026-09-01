@@ -18,16 +18,41 @@ const requestSchema = z.object({
   originalDescription: z.string().trim().max(4000).optional().default("")
 });
 
-const conceptSchema = z.object({
-  concept: z.string().trim().min(2).max(12),
-  instruction: z.string().trim().min(40).max(500)
+const loosePlanSchema = z.object({
+  concepts: z.array(z.object({
+    concept: z.string(),
+    instruction: z.string()
+  })).min(4)
 });
-const planSchema = z.object({ concepts: z.array(conceptSchema).length(4) });
 
 function parsePlan(raw: string) {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
   const candidate = fenced || raw.match(/\{[\s\S]*\}/)?.[0] || raw;
-  return planSchema.parse(JSON.parse(candidate.trim()));
+  const parsed = loosePlanSchema.parse(JSON.parse(candidate.trim()));
+  const concepts = parsed.concepts.slice(0, 4).map((item) => ({
+    concept: item.concept.trim().replace(/[｜|：:].*$/, "").slice(0, 12),
+    instruction: item.instruction.trim().slice(0, 500)
+  }));
+  if (concepts.length !== 4 || concepts.some((item) => item.concept.length < 2 || item.instruction.length < 24)) {
+    throw new Error("大脑模型返回的探索路线不完整。");
+  }
+  return { concepts };
+}
+
+async function repairPlan(raw: string, provider: { apiKey: string; baseUrl: string }, model: string) {
+  return callChatCompletion({
+    ...provider,
+    model,
+    temperature: 0.2,
+    maxCompletionTokens: 2200,
+    messages: [
+      {
+        role: "system",
+        content: "把用户提供的工业设计探索结果整理成严格 JSON。必须恰好保留四条实质路线，不要缩减设计信息，不要解释，不要 Markdown。格式：{\"concepts\":[{\"concept\":\"2-8字路线名\",\"instruction\":\"完整设计指令\"}]}"
+      },
+      { role: "user", content: raw.slice(0, 12000) }
+    ]
+  });
 }
 
 export async function POST(request: Request) {
@@ -74,7 +99,12 @@ export async function POST(request: Request) {
         }
       ]
     });
-    const plan = parsePlan(raw);
+    let plan: ReturnType<typeof parsePlan>;
+    try {
+      plan = parsePlan(raw);
+    } catch {
+      plan = parsePlan(await repairPlan(raw, provider, payload.model));
+    }
     const prepared = buildFreeExplorationPrompt({ productName: payload.productName, concepts: plan.concepts });
     return NextResponse.json({ prompt: prepared.prompt, concepts: prepared.quadrantStyleLabels });
   } catch (error) {

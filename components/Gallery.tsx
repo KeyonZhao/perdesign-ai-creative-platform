@@ -104,6 +104,7 @@ export function Gallery({
   const allResults = useMemo(() => batches.flatMap((batch) => batch.results), [batches]);
   const generationStartedAtRef = useRef(Date.now());
   const generationSessionBatchIdRef = useRef<string | null>(null);
+  const wasGeneratingRef = useRef(false);
   const knownResultIdsRef = useRef(new Set(allResults.map((result) => result.id)));
   const revealTimersRef = useRef(new Map<string, number>());
   const [revealingResultIds, setRevealingResultIds] = useState<string[]>([]);
@@ -111,10 +112,13 @@ export function Gallery({
   const wasActiveRef = useRef(false);
   const isGenerating = status === "generating";
 
-  if (isGenerating && generationSessionBatchIdRef.current !== activeBatchId) {
+  if (isGenerating && !wasGeneratingRef.current) {
     generationStartedAtRef.current = Date.now();
+  }
+  if (isGenerating && generationSessionBatchIdRef.current !== activeBatchId) {
     generationSessionBatchIdRef.current = activeBatchId;
   }
+  wasGeneratingRef.current = isGenerating;
 
   useEffect(() => {
     const knownIds = knownResultIdsRef.current;
