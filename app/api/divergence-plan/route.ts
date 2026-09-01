@@ -4,6 +4,9 @@ import { callChatCompletion } from "@/lib/aihubmix";
 import { buildFreeExplorationPrompt } from "@/lib/creative-divergence";
 import { resolveProviderConfig } from "@/lib/provider";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 const requestSchema = z.object({
   apiKey: z.string().min(1, "请先填写对话 API Key。"),
   baseUrl: z.string().url("请填写有效的对话请求地址。"),

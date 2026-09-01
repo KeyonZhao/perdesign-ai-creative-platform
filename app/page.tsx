@@ -1364,6 +1364,7 @@ export default function Home() {
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于创意发散。");
 
     const resolvedProductName = sourceProductName?.trim() || productName.trim();
+    const previousActiveBatchId = activeGenerationBatchId;
     let exactPrompt: string;
     let divergenceStyles: string[];
     try {
@@ -1371,6 +1372,7 @@ export default function Home() {
         if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) {
           throw new Error("自由探索需要可用的对话模型配置。");
         }
+        setActiveGenerationBatchId(makeId("divergence-planning"));
         setPendingGenerationCount(1);
         setStatus("generating");
         const sourceImageBase64 = await prepareImageForVision(result.imageBase64, 1600, 0.84);
@@ -1404,7 +1406,12 @@ export default function Home() {
       }
     } catch (error) {
       setStatus("error");
-      return pushToast("error", error instanceof Error ? error.message : "创意发散参数无效。");
+      setPendingGenerationCount(0);
+      setActiveGenerationBatchId(previousActiveBatchId);
+      const message = error instanceof Error ? error.message : "未知错误";
+      return pushToast("error", (request.mode || "directed") === "free"
+        ? `自由探索分析失败：${message}`
+        : message);
     }
 
     await runGeneration({
