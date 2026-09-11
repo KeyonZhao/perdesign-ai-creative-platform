@@ -117,6 +117,8 @@ export function Gallery({
   }
   if (isGenerating && generationSessionBatchIdRef.current !== activeBatchId) {
     generationSessionBatchIdRef.current = activeBatchId;
+    generationStartedAtRef.current =
+      batches.find((batch) => batch.id === activeBatchId)?.metadata?.generationStartedAt ?? Date.now();
   }
   wasGeneratingRef.current = isGenerating;
 
@@ -274,7 +276,7 @@ export function Gallery({
                 const isActiveBatch = activeBatchId === batch.id;
                 const startIndex = batches.slice(0, batchIndex).reduce((sum, item) => sum + item.results.length, 0);
 
-                return batch.results.map((result, index) => (
+                const resultCards = batch.results.map((result, index) => (
                   <div key={result.id} ref={isActiveBatch && index === 0 ? activeBatchRef : null} className="gallery-batch relative overflow-hidden">
                       <ResultCard
                         result={result}
@@ -299,12 +301,30 @@ export function Gallery({
                         isGeneratingVariant={isGeneratingVariant}
                       />
                       {revealingResultIds.includes(result.id) ? (
-                        <ImageGenerationProgress startedAt={generationStartedAtRef.current} finishing />
+                        <ImageGenerationProgress startedAt={batch.metadata?.generationStartedAt ?? generationStartedAtRef.current} finishing />
                       ) : null}
                   </div>
                 ));
+
+                const pendingCount = Math.max(
+                  0,
+                  (batch.metadata?.expectedResultCount ?? batch.results.length) - batch.results.length
+                );
+                const pendingCards = Array.from({ length: pendingCount }).map((_, index) => (
+                  <div
+                    key={`${batch.id}-pending-${index}`}
+                    ref={isActiveBatch && index === 0 ? pendingBatchRef : null}
+                    className="content-card gallery-batch overflow-hidden"
+                  >
+                    <div className="skeleton relative aspect-square w-full overflow-hidden">
+                      <ImageGenerationProgress startedAt={batch.metadata?.generationStartedAt ?? generationStartedAtRef.current} />
+                    </div>
+                  </div>
+                ));
+
+                return [...resultCards, ...pendingCards];
               })}
-              {status === "generating"
+              {status === "generating" && !batches.some((batch) => batch.id === activeBatchId)
                 ? Array.from({ length: count }).map((_, index) => (
                     <div key={`pending-${index}`} ref={index === 0 ? pendingBatchRef : null} className="content-card gallery-batch overflow-hidden">
                       <div className="skeleton relative aspect-square w-full overflow-hidden">

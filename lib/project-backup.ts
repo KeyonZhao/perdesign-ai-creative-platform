@@ -61,6 +61,8 @@ export async function exportPerdesignProject(batches: GenerationBatch[]) {
           ? {
               description: batch.metadata.description,
               imageModel: batch.metadata.imageModel,
+              generationStartedAt: batch.metadata.generationStartedAt,
+              expectedResultCount: batch.metadata.expectedResultCount,
               innovationLevel: batch.metadata.innovationLevel,
               generationType: batch.metadata.generationType,
               divergenceStyles: batch.metadata.divergenceStyles,
@@ -128,6 +130,12 @@ export async function importPerdesignProject(file: File): Promise<GenerationBatc
         ? {
             description: String(batch.metadata.description || ""),
             imageModel: batch.metadata.imageModel ? String(batch.metadata.imageModel) : undefined,
+            generationStartedAt: batch.metadata.generationStartedAt
+              ? Number(batch.metadata.generationStartedAt)
+              : undefined,
+            expectedResultCount: batch.metadata.expectedResultCount
+              ? Number(batch.metadata.expectedResultCount)
+              : undefined,
             innovationLevel: Number(batch.metadata.innovationLevel ?? 50),
             generationType: batch.metadata.generationType,
             divergenceStyles: batch.metadata.divergenceStyles,

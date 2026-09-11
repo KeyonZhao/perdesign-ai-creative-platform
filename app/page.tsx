@@ -1104,6 +1104,7 @@ export default function Home() {
     }
 
     const batchId = makeId("generation-batch");
+    const generationStartedAt = Date.now();
     const existingBatches = generationBatchesRef.current;
     const firstReservedSequence = nextGenerationSequenceRef.current;
     nextGenerationSequenceRef.current += params.count;
@@ -1113,6 +1114,8 @@ export default function Home() {
       metadata: {
         productName: params.productName,
         imageModel: selectedImageModel,
+        generationStartedAt,
+        expectedResultCount: params.count,
         description: params.metadataDescription ?? params.requirement,
         innovationLevel: params.innovationLevel,
         generationType: params.generationType || "design",
