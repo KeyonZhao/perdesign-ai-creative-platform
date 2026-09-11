@@ -20,6 +20,12 @@ export const imageModels: ModelOption[] = [
   { label: "Gemini 3.1 Flash Image", value: "gemini-3.1-flash-image", supportsEdit: true }
 ];
 
+export const selectableImageModels = imageModels.filter((model) => [
+  "gpt-image-2.5-sunburst",
+  "gpt-image-2",
+  "gemini-3-pro-image"
+].includes(model.value));
+
 export const sizeOptions: SizeOption[] = [
   { label: "1:1 方图", value: "1024x1024" },
   { label: "4:3 横图", value: "1536x1024" },

@@ -79,6 +79,7 @@ export type GenerationType =
 
 export type GenerationMetadata = {
   productName?: string;
+  imageModel?: string;
   description: string;
   innovationLevel: number;
   generationType?: GenerationType;

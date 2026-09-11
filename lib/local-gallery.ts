@@ -146,6 +146,7 @@ async function storeBatch(batch: GenerationBatch, createdAt: number): Promise<St
     metadata: batch.metadata
       ? {
           description: batch.metadata.description,
+          imageModel: batch.metadata.imageModel,
           innovationLevel: batch.metadata.innovationLevel,
           generationType: batch.metadata.generationType,
           divergenceStyles: batch.metadata.divergenceStyles,
@@ -173,6 +174,7 @@ async function restoreBatch(batch: StoredGenerationBatch): Promise<GenerationBat
     metadata: batch.metadata
       ? {
           description: batch.metadata.description,
+          imageModel: batch.metadata.imageModel,
           innovationLevel: batch.metadata.innovationLevel,
           generationType: batch.metadata.generationType,
           divergenceStyles: batch.metadata.divergenceStyles,

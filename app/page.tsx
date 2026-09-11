@@ -75,6 +75,7 @@ const storageKeys = {
   count: "product-workstation-count",
   size: "product-workstation-size",
   quality: "product-workstation-quality",
+  imageModel: "product-workstation-image-model",
   productName: "product-workstation-product-name",
   innovationLevel: "product-workstation-innovation-level"
 };
@@ -175,7 +176,10 @@ export default function Home() {
     storageKeys.chatApiBaseUrl,
     DEFAULT_CHAT_API_BASE_URL
   );
-  const imageModel = "gpt-image-2.5-sunburst";
+  const [imageModel, setImageModel] = usePersistedState(
+    storageKeys.imageModel,
+    "gpt-image-2.5-sunburst"
+  );
   const [productName, setProductName] = usePersistedState(storageKeys.productName, "");
   const [requirement, setRequirement] = usePersistedState(storageKeys.requirement, "");
   const [count, setCount] = usePersistedNumber(storageKeys.count, 4);
@@ -193,6 +197,8 @@ export default function Home() {
   const [status, setStatus] = useState<GenerationStatus>("idle");
   const [generationBatches, setGenerationBatches] = useState<GenerationBatch[]>([]);
   const generationBatchesRef = useRef<GenerationBatch[]>([]);
+  const activeGenerationRunsRef = useRef(0);
+  const nextGenerationSequenceRef = useRef(1);
   const hasRecoveredPendingJobsRef = useRef(false);
   const designDescriptionTasksRef = useRef<Map<string, Promise<string>>>(new Map());
   const [designDescriptionLoadingIds, setDesignDescriptionLoadingIds] = useState<string[]>([]);
@@ -226,6 +232,12 @@ export default function Home() {
     uploadedImage ||
     referenceImages.length
   );
+
+  useEffect(() => {
+    if (imageModel === "grok-imagine-image" || imageModel === "grok-imagine-image-2.0") {
+      setImageModel("gpt-image-2.5-sunburst");
+    }
+  }, [imageModel, setImageModel]);
 
   useEffect(() => {
     setAuthDraft(authCode);
@@ -356,6 +368,13 @@ export default function Home() {
         if (cancelled) return;
         generationBatchesRef.current = batches;
         setGenerationBatches(batches);
+        nextGenerationSequenceRef.current = batches.reduce((maximum, batch) => {
+          const batchMaximum = batch.results.reduce((resultMaximum, result) => {
+            const sequence = Number(result.title.match(/\d+/)?.[0] || 0);
+            return Math.max(resultMaximum, sequence);
+          }, 0);
+          return Math.max(maximum, batchMaximum);
+        }, 0) + 1;
         setActiveGenerationBatchId(batches.at(-1)?.id || null);
         setLocalHistoryStats(await getLocalGalleryStats());
       } catch (error) {
@@ -552,6 +571,7 @@ export default function Home() {
         id: makeId("upscale-batch"),
         metadata: {
           productName: sourceBatch?.metadata?.productName,
+          imageModel: "seedvr2-7b",
           description: `由 ${result.title || "当前图片"} 使用 SeedVR2-7B 放大至 ${targetWidth}×${targetHeight}`,
           innovationLevel: 0,
           generationType: "upscale",
@@ -1038,6 +1058,7 @@ export default function Home() {
     useExactPrompt?: boolean;
   }, forceAuthorized = false) {
     const config = getResolvedConfig(forceAuthorized);
+    const selectedImageModel = imageModel;
     const referenceImageCount = (params.referenceImage ? 1 : 0) + (params.referenceImages?.length || 0);
     const requestImageCount =
       (params.sketchImage ? 1 : 0) +
@@ -1084,12 +1105,14 @@ export default function Home() {
 
     const batchId = makeId("generation-batch");
     const existingBatches = generationBatchesRef.current;
-    const existingResultCount = existingBatches.reduce((sum, batch) => sum + batch.results.length, 0);
+    const firstReservedSequence = nextGenerationSequenceRef.current;
+    nextGenerationSequenceRef.current += params.count;
     const progressiveBatch: GenerationBatch = {
       id: batchId,
       results: [],
       metadata: {
         productName: params.productName,
+        imageModel: selectedImageModel,
         description: params.metadataDescription ?? params.requirement,
         innovationLevel: params.innovationLevel,
         generationType: params.generationType || "design",
@@ -1104,7 +1127,8 @@ export default function Home() {
     generationBatchesRef.current = batchesWithProgressiveBatch;
     setGenerationBatches(batchesWithProgressiveBatch);
     setActiveGenerationBatchId(batchId);
-    setPendingGenerationCount(params.count);
+    activeGenerationRunsRef.current += 1;
+    setPendingGenerationCount((current) => current + params.count);
     setStatus("generating");
     await persistGeneratedBatch(progressiveBatch);
 
@@ -1114,7 +1138,7 @@ export default function Home() {
 
     async function requestSingleResult(requestIndex: number): Promise<GenerationResult> {
       let submittedJobId = "";
-      const sequence = existingResultCount + requestIndex + 1;
+      const sequence = firstReservedSequence + requestIndex;
       try {
         const response = await fetch("/api/generate", {
           method: "POST",
@@ -1125,7 +1149,7 @@ export default function Home() {
             chatApiKey: config.chatApiKey,
             chatApiBaseUrl: config.chatApiBaseUrl,
             brainModel: BRAIN_MODEL,
-            imageModel,
+            imageModel: selectedImageModel,
             productName: params.productName,
             sketchImageBase64: preparedSketchImageBase64,
             imageBase64: preparedProductImageBase64,
@@ -1213,7 +1237,7 @@ export default function Home() {
         if (requestIndex >= params.count) return;
         appendCompletedResult(
           await requestSingleResult(requestIndex),
-          existingResultCount + requestIndex + 1
+          firstReservedSequence + requestIndex
         );
       }
     }
@@ -1223,13 +1247,14 @@ export default function Home() {
       await Promise.all(Array.from({ length: workerCount }, () => generationWorker()));
       const completedBatch = generationBatchesRef.current.find((batch) => batch.id === batchId);
       if (completedBatch) void persistGeneratedBatch(completedBatch);
-      setPendingGenerationCount(0);
-      setStatus("success");
+      activeGenerationRunsRef.current = Math.max(0, activeGenerationRunsRef.current - 1);
+      if (activeGenerationRunsRef.current === 0) setStatus("success");
       pushToast(failedCount ? "info" : "success", failedCount ? `已完成，${failedCount} 个方案生成失败。` : "全部方案生成完成。");
     } catch (error) {
-      setPendingGenerationCount(0);
-      setStatus("error");
-      setActiveGenerationBatchId(null);
+      const unresolvedCount = Math.max(0, params.count - completedCount);
+      setPendingGenerationCount((current) => Math.max(0, current - unresolvedCount));
+      activeGenerationRunsRef.current = Math.max(0, activeGenerationRunsRef.current - 1);
+      setStatus(activeGenerationRunsRef.current > 0 ? "generating" : "error");
       pushToast("error", error instanceof Error ? error.message : "生成失败，请检查配置后重试。");
     }
   }
@@ -1428,6 +1453,9 @@ export default function Home() {
         : message);
     }
 
+    if ((request.mode || "directed") === "free") {
+      setPendingGenerationCount(0);
+    }
     await runGeneration({
       productName: resolvedProductName,
       productImage: { name: `${result.title}.png`, dataUrl: result.imageBase64 },
@@ -2373,6 +2401,8 @@ export default function Home() {
                     setCount={setCount}
                     size={size}
                     setSize={setSize}
+                    imageModel={imageModel}
+                    setImageModel={setImageModel}
                     status={status}
                     hasChatConfig={hasChatConfig}
                     canGenerate={canGenerate}

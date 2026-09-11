@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
+import { imageModels } from "@/lib/models";
 import type { CreativeDivergenceRequest, DivergenceExplorationLevel, DivergenceMode, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage, VideoGenerationRequest } from "@/lib/types";
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
 import { TripoModelViewer } from "./TripoModelViewer";
@@ -72,6 +73,9 @@ export function ImagePreviewModal({
   isGeneratingVariant = false,
   isGeneratingDesignDescription = false
 }: ImagePreviewModalProps) {
+  const generationModelLabel = metadata?.imageModel
+    ? imageModels.find((model) => model.value === metadata.imageModel)?.label || metadata.imageModel
+    : "未记录";
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const brushCursorRef = useRef<HTMLDivElement | null>(null);
   const imagePromptFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1712,6 +1716,13 @@ export function ImagePreviewModal({
                   ) : null}
                 </section>
               ) : null}
+
+              <section className="image-preview-info-section">
+                <div className="image-preview-info-row">
+                  <span className="image-preview-info-label">生图模型</span>
+                  <strong title={metadata?.imageModel}>{generationModelLabel}</strong>
+                </div>
+              </section>
 
               <section className="image-preview-info-section">
                 <div className="image-preview-info-row">

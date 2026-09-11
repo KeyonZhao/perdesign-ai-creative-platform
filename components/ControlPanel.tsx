@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Maximize2, RotateCcw, Sparkles, Wand2, X } from "lucide-react";
-import { sizeOptions } from "@/lib/models";
+import { selectableImageModels, sizeOptions } from "@/lib/models";
 import type { GenerationStatus, ProductInputMode, UploadedImage } from "@/lib/types";
 import { ImageUploader } from "./ImageUploader";
 import { ReferenceImageUploader } from "./ReferenceImageUploader";
@@ -93,6 +93,75 @@ export function ImageSizeSelect({
   );
 }
 
+function ImageModelSelect({
+  value,
+  onChange,
+  disabled
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedModel = selectableImageModels.find((model) => model.value === value) || selectableImageModels[0];
+
+  useEffect(() => {
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
+  return (
+    <div ref={rootRef} className={`image-model-select ${isOpen ? "open" : ""}`}>
+      <button
+        type="button"
+        className="image-model-trigger"
+        onClick={() => setIsOpen((current) => !current)}
+        disabled={disabled}
+        aria-label="生图模型"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+      >
+        <span>{selectedModel.label}</span>
+        <ChevronDown className="image-model-chevron h-3.5 w-3.5" />
+      </button>
+      {isOpen ? (
+        <div className="image-size-menu image-model-menu" role="listbox" aria-label="生图模型">
+          {selectableImageModels.map((model) => {
+            const selected = model.value === value;
+            return (
+              <button
+                key={model.value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`image-size-option image-model-option ${selected ? "selected" : ""}`}
+                onClick={() => {
+                  onChange(model.value);
+                  setIsOpen(false);
+                }}
+              >
+                <span>{model.label}</span>
+                {selected ? <Check className="ml-auto h-3.5 w-3.5" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 type ControlPanelProps = {
   productName: string;
   setProductName: (value: string) => void;
@@ -110,6 +179,8 @@ type ControlPanelProps = {
   setCount: (value: number) => void;
   size: string;
   setSize: (value: string) => void;
+  imageModel: string;
+  setImageModel: (value: string) => void;
   status: GenerationStatus;
   hasChatConfig: boolean;
   canGenerate: boolean;
@@ -124,7 +195,7 @@ export function ControlPanel(props: ControlPanelProps) {
   const requirementRef = useRef<HTMLTextAreaElement | null>(null);
   const expandedRequirementRef = useRef<HTMLTextAreaElement | null>(null);
   const [isRequirementExpanded, setIsRequirementExpanded] = useState(false);
-  const busy = props.status === "generating" || props.status === "optimizing";
+  const busy = props.status === "optimizing";
   const canGenerate = Boolean(props.canGenerate && !busy);
   const canOptimize = Boolean(
     props.productName.trim() ||
@@ -314,15 +385,19 @@ export function ControlPanel(props: ControlPanelProps) {
         </div>
       </div>
 
-      <div className="liquid-divider border-t p-6">
+      <div className="liquid-divider space-y-2.5 border-t px-4 py-3.5">
+        <div className="flex items-center gap-3">
+          <span className="shrink-0 text-xs text-slate-400">模型</span>
+          <ImageModelSelect value={props.imageModel} onChange={props.setImageModel} disabled={busy} />
+        </div>
         <button
           type="button"
           className="btn-primary flex h-12 w-full items-center justify-center gap-2 rounded-[14px] text-sm font-semibold"
           disabled={!canGenerate}
           onClick={props.onGenerate}
         >
-          {props.status === "generating" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {props.status === "generating" ? "正在重构..." : "开始智能重构"}
+          <Sparkles className="h-4 w-4" />
+          {props.status === "generating" ? "再次提交重构" : "开始智能重构"}
         </button>
       </div>
     </div>
