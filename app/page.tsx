@@ -175,7 +175,7 @@ export default function Home() {
     storageKeys.chatApiBaseUrl,
     DEFAULT_CHAT_API_BASE_URL
   );
-  const imageModel = "gpt-image-2";
+  const imageModel = "gpt-image-2.5-sunburst";
   const [productName, setProductName] = usePersistedState(storageKeys.productName, "");
   const [requirement, setRequirement] = usePersistedState(storageKeys.requirement, "");
   const [count, setCount] = usePersistedNumber(storageKeys.count, 4);

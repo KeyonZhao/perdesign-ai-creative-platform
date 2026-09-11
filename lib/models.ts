@@ -10,6 +10,8 @@ export const brainModels: ModelOption[] = [
 ];
 
 export const imageModels: ModelOption[] = [
+  { label: "GPT Image 2.5 Sunburst", value: "gpt-image-2.5-sunburst", supportsEdit: true },
+  { label: "GPT Image 2.5 Flare", value: "gpt-image-2.5-flare", supportsEdit: true },
   { label: "GPT Image 2", value: "gpt-image-2", supportsEdit: true },
   { label: "GPT Image 2 Auto", value: "gpt-image-2-auto", supportsEdit: true },
   { label: "GPT Image 2 N", value: "gpt-image-2-n", supportsEdit: true },
