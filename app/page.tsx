@@ -906,8 +906,8 @@ export default function Home() {
     setStatus("optimizing");
     try {
       const [subjectImageForOptimization, referenceImagesForOptimization] = await Promise.all([
-        uploadedImage ? prepareImageForVision(uploadedImage.dataUrl, 1600, 0.82) : Promise.resolve(undefined),
-        Promise.all(referenceImages.map((image) => prepareImageForVision(image.dataUrl, 1600, 0.82)))
+        uploadedImage ? prepareImageForVision(uploadedImage.dataUrl, 1200, 0.78, 500_000) : Promise.resolve(undefined),
+        Promise.all(referenceImages.map((image) => prepareImageForVision(image.dataUrl, 1200, 0.78, 450_000)))
       ]);
       const response = await fetch("/api/optimize-prompt", {
         method: "POST",
@@ -947,9 +947,9 @@ export default function Home() {
     }
 
     const [productImageForOptimization, referenceImageForOptimization] = await Promise.all([
-      prepareImageForVision(request.sourceImage.dataUrl, 1600, 0.82),
+      prepareImageForVision(request.sourceImage.dataUrl, 1200, 0.78, 500_000),
       request.referenceImage
-        ? prepareImageForVision(request.referenceImage.dataUrl, 1600, 0.82)
+        ? prepareImageForVision(request.referenceImage.dataUrl, 1200, 0.78, 450_000)
         : Promise.resolve(undefined)
     ]);
     const response = await fetch("/api/optimize-prompt", {

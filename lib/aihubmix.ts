@@ -229,16 +229,35 @@ export async function optimizeUserPrompt(params: {
     content.push({ type: "image_url", image_url: { url: image } });
   });
 
-  return callChatCompletion({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    model: params.model,
-    temperature: 0.35,
-    messages: [
-      { role: "system", content: PROMPT_OPTIMIZER_SYSTEM_PROMPT },
-      { role: "user", content }
-    ]
-  });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let optimizedPrompt = "";
+    try {
+      await streamChatCompletion({
+        baseUrl: params.baseUrl,
+        apiKey: params.apiKey,
+        model: params.model,
+        temperature: 0.35,
+        maxCompletionTokens: 1000,
+        timeoutMs: 25_000,
+        reasoningEffort: "low",
+        messages: [
+          { role: "system", content: PROMPT_OPTIMIZER_SYSTEM_PROMPT },
+          { role: "user", content }
+        ]
+      }, (contentDelta) => {
+        optimizedPrompt += contentDelta;
+      });
+      const normalizedPrompt = optimizedPrompt.trim();
+      if (normalizedPrompt) return normalizedPrompt;
+      lastError = new Error("接口没有返回有效的提示词内容。");
+    } catch (error) {
+      const partialPrompt = optimizedPrompt.trim();
+      if (partialPrompt.length >= 80) return partialPrompt;
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("提示词优化服务暂时不可用，请稍后重试。");
 }
 
 export async function analyzeReferenceStyle(params: {
