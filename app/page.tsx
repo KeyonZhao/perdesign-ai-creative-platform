@@ -1403,7 +1403,7 @@ export default function Home() {
         setActiveGenerationBatchId(makeId("divergence-planning"));
         setPendingGenerationCount(1);
         setStatus("generating");
-        const sourceImageBase64 = await prepareImageForVision(result.imageBase64, 1600, 0.84);
+        const sourceImageBase64 = await prepareImageForVision(result.imageBase64, 1200, 0.78, 500_000);
         const plannerResponse = await fetch("/api/divergence-plan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
