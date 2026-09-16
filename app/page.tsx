@@ -1836,34 +1836,35 @@ export default function Home() {
       const assistantMessageId = makeId("research-assistant");
       let streamedContent = "";
       let streamError = "";
-      setResearchMessages((current) => [
-        ...current,
-        { id: assistantMessageId, role: "assistant", content: "" }
-      ]);
+      const upsertAssistantMessage = (patch: Partial<ResearchMessage>) => {
+        setResearchMessages((current) => {
+          const existingIndex = current.findIndex((message) => message.id === assistantMessageId);
+          if (existingIndex < 0) {
+            return [
+              ...current,
+              { id: assistantMessageId, role: "assistant", content: "", ...patch }
+            ];
+          }
+          return current.map((message, index) =>
+            index === existingIndex ? { ...message, ...patch } : message
+          );
+        });
+      };
 
       await readNdjsonStream(response.body, (event) => {
         if (event.type === "delta" && event.content) {
           streamedContent += event.content;
           if (!requestedWebEvidence) {
-            setResearchMessages((current) => current.map((message) =>
-              message.id === assistantMessageId
-                ? { ...message, content: streamedContent }
-                : message
-            ));
+            upsertAssistantMessage({ content: streamedContent });
           }
         } else if (event.type === "done") {
           const sourceCount = event.sources?.filter((source) => typeof source !== "string").length || 0;
           const imageCount = event.images?.length || 0;
-          setResearchMessages((current) => current.map((message) =>
-            message.id === assistantMessageId
-              ? {
-                  ...message,
-                  content: reconcileResearchEvidenceClaims(streamedContent, sourceCount, imageCount, requestedWebEvidence),
-                  sources: event.sources || [],
-                  images: event.images || []
-                }
-              : message
-          ));
+          upsertAssistantMessage({
+            content: reconcileResearchEvidenceClaims(streamedContent, sourceCount, imageCount, requestedWebEvidence),
+            sources: event.sources || [],
+            images: event.images || []
+          });
           if (sourceCount || imageCount) {
             pushToast("success", `已附上 ${sourceCount} 个网络来源${imageCount ? `和 ${imageCount} 张相关图片` : ""}，位于本条回复下方。`);
           }
@@ -3023,7 +3024,7 @@ function ResearchSection({
               ) : null}
             </article>
           ))}
-          {isResponding ? (
+          {isResponding && messages[messages.length - 1]?.role !== "assistant" ? (
             <article className="research-message assistant">
               <div className="research-role">
                 <Bot className="h-4 w-4" />
