@@ -31,6 +31,7 @@ type ResearchReply = {
 };
 
 const PROJECT_BRIEF_LINK = "https://keyonzhao.github.io/perdesign/";
+const RESEARCH_FALLBACK_MODEL = process.env.PERDESIGN_RESEARCH_FALLBACK_MODEL?.trim() || "gpt-6-astra";
 
 const PROJECT_DISCOVERY_PROTOCOL = [
   "项目访谈协议（正式策划开始前必须执行）：",
@@ -140,7 +141,26 @@ export async function generateResearchReply(params: {
   };
   let answer: string;
   if (params.onDelta) {
-    const firstResult = await streamChatCompletion(completionParams, params.onDelta);
+    let emittedContent = "";
+    const emitDelta = (content: string) => {
+      emittedContent += content;
+      params.onDelta?.(content);
+    };
+    let activeCompletionParams = {
+      ...completionParams,
+      reasoningEffort: "low" as const,
+      timeoutMs: 240_000
+    };
+    let firstResult: Awaited<ReturnType<typeof streamChatCompletion>>;
+    try {
+      firstResult = await streamChatCompletion(activeCompletionParams, emitDelta);
+    } catch (error) {
+      if (emittedContent.trim() || params.model === RESEARCH_FALLBACK_MODEL || !isRetryableResearchModelError(error)) {
+        throw error;
+      }
+      activeCompletionParams = { ...activeCompletionParams, model: RESEARCH_FALLBACK_MODEL };
+      firstResult = await streamChatCompletion(activeCompletionParams, emitDelta);
+    }
     answer = firstResult.content;
     let finishReason = firstResult.finishReason;
     let continuationCount = 0;
@@ -148,7 +168,7 @@ export async function generateResearchReply(params: {
       continuationCount += 1;
       const continuationResult = await streamChatCompletion(
         {
-          ...completionParams,
+          ...activeCompletionParams,
           messages: [
             ...completionParams.messages,
             { role: "assistant" as const, content: answer },
@@ -163,7 +183,7 @@ export async function generateResearchReply(params: {
             }
           ]
         },
-        params.onDelta
+        emitDelta
       );
       answer += continuationResult.content;
       finishReason = continuationResult.finishReason;
@@ -183,6 +203,11 @@ export async function generateResearchReply(params: {
     ],
     images: webEvidence.images
   } satisfies ResearchReply;
+}
+
+function isRetryableResearchModelError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /server_error|upstream|temporarily|暂时不可用|没有返回有效文本|abort|timeout|超时|processing your request/i.test(message);
 }
 
 function buildWebResearchQuery(conversation: ResearchConversationMessage[], latestUserMessage: string) {

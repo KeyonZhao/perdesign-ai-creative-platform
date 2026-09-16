@@ -125,23 +125,38 @@ export async function streamChatCompletion(
     for (const line of lines) {
       const data = line.trim().replace(/^data:\s*/, "");
       if (!data || data === "[DONE]") continue;
+      let json: {
+        choices?: Array<{
+          delta?: { content?: string };
+          message?: { content?: string };
+          finish_reason?: string | null;
+        }>;
+        error?: { message?: string; type?: string; code?: string };
+      };
       try {
-        const json = JSON.parse(data) as {
+        json = JSON.parse(data) as typeof json;
+      } catch {
+        // Ignore keep-alive and provider-specific non-JSON stream lines.
+        continue;
+      }
+      if (json.error) {
+        throw new Error(json.error.message || json.error.type || "上游文本服务返回错误。");
+      }
+      {
+        const parsed = json as {
           choices?: Array<{
             delta?: { content?: string };
             message?: { content?: string };
             finish_reason?: string | null;
           }>;
         };
-        const choice = json.choices?.[0];
+        const choice = parsed.choices?.[0];
         const delta = choice?.delta?.content || choice?.message?.content || "";
         if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
         if (delta) {
           content += delta;
           onDelta(delta);
         }
-      } catch {
-        // Ignore keep-alive and provider-specific stream lines.
       }
     }
     if (done) break;
