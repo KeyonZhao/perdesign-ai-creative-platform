@@ -14,6 +14,7 @@ const conceptSchema = z.object({
 const conceptListSchema = z.array(conceptSchema);
 const IMAGE_DEBUG_LOG = `${process.cwd()}/logs/image-api-debug.log`;
 const IMAGE_FETCH_RETRY_DELAYS_MS = [800, 1800];
+const PROMPT_FALLBACK_MODEL = process.env.PERDESIGN_PROMPT_FALLBACK_MODEL?.trim() || "gpt-6-astra";
 
 export type AsyncImageSubmission = {
   jobId: string;
@@ -245,16 +246,19 @@ export async function optimizeUserPrompt(params: {
   });
 
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const attemptModels = params.model === PROMPT_FALLBACK_MODEL
+    ? [params.model]
+    : [params.model, PROMPT_FALLBACK_MODEL];
+  for (let attempt = 0; attempt < attemptModels.length; attempt += 1) {
     let optimizedPrompt = "";
     try {
       await streamChatCompletion({
         baseUrl: params.baseUrl,
         apiKey: params.apiKey,
-        model: params.model,
+        model: attemptModels[attempt],
         temperature: 0.35,
         maxCompletionTokens: 1000,
-        timeoutMs: 25_000,
+        timeoutMs: attempt === 0 ? 18_000 : 32_000,
         reasoningEffort: "low",
         messages: [
           { role: "system", content: PROMPT_OPTIMIZER_SYSTEM_PROMPT },
