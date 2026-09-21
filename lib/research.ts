@@ -151,15 +151,28 @@ export async function generateResearchReply(params: {
       reasoningEffort: "low" as const,
       timeoutMs: 240_000
     };
-    let firstResult: Awaited<ReturnType<typeof streamChatCompletion>>;
-    try {
-      firstResult = await streamChatCompletion(activeCompletionParams, emitDelta);
-    } catch (error) {
-      if (emittedContent.trim() || params.model === RESEARCH_FALLBACK_MODEL || !isRetryableResearchModelError(error)) {
-        throw error;
+    let firstResult: Awaited<ReturnType<typeof streamChatCompletion>> | undefined;
+    let lastCompletionError: unknown;
+    const attemptModels = params.model === RESEARCH_FALLBACK_MODEL
+      ? [params.model, params.model]
+      : [params.model, RESEARCH_FALLBACK_MODEL, RESEARCH_FALLBACK_MODEL];
+    for (let attempt = 0; attempt < attemptModels.length; attempt += 1) {
+      activeCompletionParams = { ...activeCompletionParams, model: attemptModels[attempt] };
+      try {
+        firstResult = await streamChatCompletion(activeCompletionParams, emitDelta);
+        break;
+      } catch (error) {
+        lastCompletionError = error;
+        if (emittedContent.trim() || !isRetryableResearchModelError(error) || attempt === attemptModels.length - 1) {
+          throw error;
+        }
+        if (attempt > 0) await wait(1200 * attempt);
       }
-      activeCompletionParams = { ...activeCompletionParams, model: RESEARCH_FALLBACK_MODEL };
-      firstResult = await streamChatCompletion(activeCompletionParams, emitDelta);
+    }
+    if (!firstResult) {
+      throw lastCompletionError instanceof Error
+        ? lastCompletionError
+        : new Error("策划研究服务暂时繁忙，请稍后重试。");
     }
     answer = firstResult.content;
     let finishReason = firstResult.finishReason;
@@ -207,7 +220,11 @@ export async function generateResearchReply(params: {
 
 function isRetryableResearchModelError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /server_error|upstream|temporarily|暂时不可用|没有返回有效文本|abort|timeout|超时|processing your request/i.test(message);
+  return /server_error|upstream|temporarily|overload|overloaded|servers? (?:are )?(?:currently )?(?:busy|overloaded)|rate.?limit|too many requests|concurrency limit|暂时不可用|服务器繁忙|服务繁忙|过载|限流|请求过多|没有返回有效文本|abort|timeout|超时|processing your request/i.test(message);
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 function buildWebResearchQuery(conversation: ResearchConversationMessage[], latestUserMessage: string) {
