@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   FileDown,
+  FileText,
   Grid3X3,
   Loader2,
   Mic,
@@ -109,11 +110,15 @@ type MindMapSession = ActiveMindMap & {
   analysisVersion?: string;
 };
 type ResearchFile = {
+  id?: string;
   name: string;
   size: number;
   type: string;
   dataUrl?: string;
   extractedText?: string;
+  status?: "reading" | "ready" | "error";
+  progress?: number;
+  error?: string;
 };
 type PendingAuthAction =
   | { type: "generate" }
@@ -1778,6 +1783,14 @@ export default function Home() {
       pushToast("error", "当前认证信息不可用，请重新输入认证码。");
       return;
     }
+    if (researchFiles.some((file) => file.status === "reading")) {
+      pushToast("info", "附件仍在上传和读取中，请等待进度完成后再发送。");
+      return;
+    }
+    if (researchFiles.some((file) => file.status === "error")) {
+      pushToast("error", "有附件读取失败，请点击失败附件将其移除后重试。");
+      return;
+    }
 
     const files = researchFiles.length ? [...researchFiles] : undefined;
     const userContent = researchInput.trim() || "请基于我上传的资料继续展开研究。";
@@ -2290,42 +2303,59 @@ export default function Home() {
       pushToast("info", "正在读取 PDF 或 Word 正文，请稍候。");
     }
 
+    const pendingFiles: ResearchFile[] = supportedFiles.map((file) => ({
+      id: makeId("research-file"),
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      status: "reading",
+      progress: 2
+    }));
+    setResearchFiles((current) => [...current, ...pendingFiles].slice(0, 4));
+
+    const updatePendingFile = (id: string, patch: Partial<ResearchFile>) => {
+      setResearchFiles((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
+    };
+
     try {
       const results = await Promise.allSettled(
-        supportedFiles.map(async (file) => {
+        supportedFiles.map(async (file, index) => {
+          const pending = pendingFiles[index];
           if (file.size > 25 * 1024 * 1024) {
             throw new Error(`${file.name} 超过 25MB，请压缩后重新上传。`);
           }
           if (!file.type.startsWith("image/")) {
-            const formData = new FormData();
-            formData.append("file", file);
-            const response = await fetch("/api/research-document", { method: "POST", body: formData });
-            const payload = await readApiResponse<{ content?: string; error?: string }>(response);
-            if (!response.ok || !payload.content) throw new Error(payload.error || `${file.name} 无法读取。`);
-            return { name: file.name, size: file.size, type: file.type, extractedText: payload.content } satisfies ResearchFile;
+            const payload = await uploadResearchDocument(file, (progress) => {
+              updatePendingFile(pending.id!, { progress });
+            });
+            return { ...pending, extractedText: payload.content, status: "ready", progress: 100 } satisfies ResearchFile;
           }
+          updatePendingFile(pending.id!, { progress: 24 });
           const originalDataUrl = await readFileAsDataUrl(file);
+          updatePendingFile(pending.id!, { progress: 68 });
           const dataUrl = await prepareImageForVision(originalDataUrl, 1600, 0.82);
           return {
-            name: file.name,
-            size: file.size,
-            type: file.type,
-            dataUrl
+            ...pending,
+            dataUrl,
+            status: "ready",
+            progress: 100
           } satisfies ResearchFile;
         })
       );
-      const next: ResearchFile[] = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : []
-      );
-      const failures = results.flatMap((result) =>
-        result.status === "rejected"
-          ? [result.reason instanceof Error ? result.reason.message : "文件无法读取。"]
-          : []
-      );
-      if (next.length) {
-        setResearchFiles((current) => [...current, ...next].slice(0, 4));
-        pushToast("success", `已读取 ${next.length} 个文件，可以发送给策划助手。`);
-      }
+      const completed = results.filter((result) => result.status === "fulfilled");
+      results.forEach((result, index) => {
+        const pending = pendingFiles[index];
+        if (result.status === "fulfilled") {
+          updatePendingFile(pending.id!, result.value);
+          return;
+        }
+        const message = result.reason instanceof Error ? result.reason.message : "文件无法读取。";
+        updatePendingFile(pending.id!, { status: "error", progress: 100, error: message });
+      });
+      const failures = results.flatMap((result) => result.status === "rejected"
+        ? [result.reason instanceof Error ? result.reason.message : "文件无法读取。"]
+        : []);
+      if (completed.length) pushToast("success", `已读取 ${completed.length} 个文件，可以发送给策划助手。`);
       if (failures.length) pushToast("error", failures.join("；"));
     } catch (error) {
       pushToast("error", error instanceof Error ? error.message : "附件读取失败，请更换文件后重试。");
@@ -2858,10 +2888,16 @@ function ResearchSection({
             ref={historyImportInputRef}
             className="hidden"
             type="file"
-            accept=".json,.perdesign-research.json,application/json"
+            accept=".json,.perdesign-research.json,application/json,.pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) void onImportSession(file);
+              if (file) {
+                if (/\.(?:json|perdesign-research\.json)$/i.test(file.name) || file.type === "application/json") {
+                  void onImportSession(file);
+                } else {
+                  void addFiles(event.target.files);
+                }
+              }
               event.target.value = "";
             }}
           />
@@ -2872,7 +2908,7 @@ function ResearchSection({
             disabled={isResponding}
           >
             <Upload className="h-3.5 w-3.5" />
-            <span>导入策划项目</span>
+            <span>导入策划 / 资料</span>
           </button>
           <div className="research-history-list">
             {historyReady ? sessions.map((session) => (
@@ -3073,7 +3109,7 @@ function ResearchSection({
                 <div className="research-chip-row">
                   {message.files.map((file, index) => (
                     <span key={`${message.id}-${file.name}-${index}`} className="research-chip research-file-chip">
-                      {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileDown className="h-3.5 w-3.5" />}
+                      {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileText className="h-3.5 w-3.5" />}
                       <span className="research-file-name">{file.name}</span>
                     </span>
                   ))}
@@ -3107,8 +3143,16 @@ function ResearchSection({
                   onClick={() => onRemoveFile(index)}
                   title="点击移除"
                 >
-                  {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileDown className="h-3.5 w-3.5" />}
-                  <span className="research-file-name">{file.name}</span>
+                  {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileText className="h-3.5 w-3.5" />}
+                  <span className="research-file-info">
+                    <span className="research-file-name">{file.name}</span>
+                    {file.status === "reading" ? <small>正在上传并读取 · {Math.round(file.progress || 0)}%</small> : null}
+                    {file.status === "error" ? <small className="error">读取失败，点击移除</small> : null}
+                  </span>
+                  {file.status === "reading" ? (
+                    <span className="research-file-progress" aria-hidden="true"><i style={{ width: `${file.progress || 0}%` }} /></span>
+                  ) : null}
+                  <X className="research-file-remove" aria-hidden="true" />
                 </button>
               ))}
             </div>
@@ -3912,5 +3956,47 @@ function readFileAsDataUrl(file: File) {
     };
     reader.onerror = () => reject(new Error(`${file.name} 读取失败，请重新上传。`));
     reader.readAsDataURL(file);
+  });
+}
+
+function uploadResearchDocument(file: File, onProgress: (progress: number) => void) {
+  return new Promise<{ content: string }>((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const request = new XMLHttpRequest();
+    let parsingProgress = 72;
+    let parsingTimer: number | undefined;
+
+    const stopTimer = () => {
+      if (parsingTimer !== undefined) window.clearInterval(parsingTimer);
+    };
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.max(3, Math.min(70, Math.round((event.loaded / event.total) * 70))));
+    };
+    request.upload.onload = () => {
+      onProgress(parsingProgress);
+      parsingTimer = window.setInterval(() => {
+        parsingProgress = Math.min(94, parsingProgress + 2);
+        onProgress(parsingProgress);
+      }, 650);
+    };
+    request.onerror = () => {
+      stopTimer();
+      reject(new Error(`${file.name} 上传失败，请检查网络后重试。`));
+    };
+    request.onload = () => {
+      stopTimer();
+      let payload: { content?: string; error?: string } = {};
+      try { payload = JSON.parse(request.responseText || "{}"); } catch { /* handled below */ }
+      if (request.status < 200 || request.status >= 300 || !payload.content) {
+        reject(new Error(payload.error || `${file.name} 无法读取。`));
+        return;
+      }
+      onProgress(100);
+      resolve({ content: payload.content });
+    };
+    request.open("POST", "/api/research-document");
+    request.send(formData);
   });
 }

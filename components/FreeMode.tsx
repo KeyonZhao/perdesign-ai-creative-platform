@@ -16,6 +16,9 @@ type FreeAttachment = {
   type: string;
   dataUrl?: string;
   extractedText?: string;
+  status?: "reading" | "ready" | "error";
+  progress?: number;
+  error?: string;
 };
 
 type FreeMessage = {
@@ -131,31 +134,53 @@ export function FreeMode({
     const selected = Array.from(files).slice(0, available);
     if (selected.length < files.length) onToast("info", `已保留前 ${available} 个文件，单条消息最多 ${MAX_ATTACHMENTS} 个。`);
 
+    const pending: FreeAttachment[] = selected.map((file) => ({
+      id: makeId("free-file"),
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      status: "reading",
+      progress: 2
+    }));
+    setAttachments((current) => [...current, ...pending].slice(0, MAX_ATTACHMENTS));
+    const updatePending = (id: string, patch: Partial<FreeAttachment>) => {
+      setAttachments((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
+    };
+
     try {
-      const next = await Promise.all(selected.map(async (file) => {
+      const results = await Promise.allSettled(selected.map(async (file, index) => {
+        const placeholder = pending[index];
         if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} 超过平台当前 25MB 单文件上限。`);
         if (file.type.startsWith("image/")) {
           if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} 超过图片 20MB 上限。`);
+          updatePending(placeholder.id, { progress: 22 });
           const original = await readFileAsDataUrl(file);
+          updatePending(placeholder.id, { progress: 68 });
           const dataUrl = await prepareImageForVision(original, 1800, 0.84, 1_200_000);
-          return { id: makeId("free-file"), name: file.name, size: file.size, type: file.type, dataUrl };
+          return { ...placeholder, dataUrl, status: "ready" as const, progress: 100 };
         }
-        const form = new FormData();
-        form.append("file", file);
-        const response = await fetch("/api/free-chat/file", { method: "POST", body: form });
-        const payload = await readJson<{ content?: string; error?: string }>(response);
-        if (!response.ok || !payload.content) throw new Error(payload.error || `${file.name} 无法读取。`);
+        const payload = await uploadFreeModeDocument(file, (progress) => updatePending(placeholder.id, { progress }));
         return {
-          id: makeId("free-file"),
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          extractedText: payload.content
+          ...placeholder,
+          extractedText: payload.content,
+          status: "ready" as const,
+          progress: 100
         };
       }));
-      setAttachments((current) => [...current, ...next].slice(0, MAX_ATTACHMENTS));
-    } catch (error) {
-      onToast("error", error instanceof Error ? error.message : "附件读取失败。");
+      const errors: string[] = [];
+      results.forEach((result, index) => {
+        const placeholder = pending[index];
+        if (result.status === "fulfilled") {
+          updatePending(placeholder.id, result.value);
+          return;
+        }
+        const message = result.reason instanceof Error ? result.reason.message : "附件读取失败。";
+        errors.push(message);
+        updatePending(placeholder.id, { status: "error", progress: 100, error: message });
+      });
+      const completed = results.filter((result) => result.status === "fulfilled").length;
+      if (completed) onToast("success", `已读取 ${completed} 个附件。`);
+      if (errors.length) onToast("error", errors.join("；"));
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -164,6 +189,12 @@ export function FreeMode({
   async function send() {
     if (isResponding || (!input.trim() && !attachments.length)) return;
     if (!authorized) return onNeedAuth();
+    if (attachments.some((file) => file.status === "reading")) {
+      return onToast("info", "附件仍在上传和读取中，请等待进度完成后再发送。");
+    }
+    if (attachments.some((file) => file.status === "error")) {
+      return onToast("error", "有附件读取失败，请先将失败附件移除。");
+    }
     const userText = input.trim() || "请阅读并分析我上传的内容。";
     const sentAttachments = [...attachments];
     const documentText = sentAttachments
@@ -355,7 +386,11 @@ export function FreeMode({
             {attachments.map((file) => (
               <div className="free-attachment" key={file.id}>
                 {file.dataUrl ? <img src={file.dataUrl} alt="" /> : <FileText />}
-                <span><b>{file.name}</b><small>{formatBytes(file.size)}</small></span>
+                <span>
+                  <b>{file.name}</b>
+                  <small>{file.status === "reading" ? `正在上传并读取 · ${Math.round(file.progress || 0)}%` : file.status === "error" ? "读取失败，点击移除" : formatBytes(file.size)}</small>
+                </span>
+                {file.status === "reading" ? <i className="free-attachment-progress" style={{ width: `${file.progress || 0}%` }} /> : null}
                 <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== file.id))} aria-label={`移除 ${file.name}`}><X /></button>
               </div>
             ))}
@@ -607,6 +642,46 @@ function readFileAsDataUrl(file: File) {
     reader.onload = () => resolve(String(reader.result || ""));
     reader.onerror = () => reject(new Error(`${file.name} 读取失败。`));
     reader.readAsDataURL(file);
+  });
+}
+
+function uploadFreeModeDocument(file: File, onProgress: (progress: number) => void) {
+  return new Promise<{ content: string }>((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const request = new XMLHttpRequest();
+    let parsingProgress = 72;
+    let parsingTimer: number | undefined;
+    const stopTimer = () => {
+      if (parsingTimer !== undefined) window.clearInterval(parsingTimer);
+    };
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(Math.max(3, Math.min(70, Math.round((event.loaded / event.total) * 70))));
+    };
+    request.upload.onload = () => {
+      onProgress(parsingProgress);
+      parsingTimer = window.setInterval(() => {
+        parsingProgress = Math.min(94, parsingProgress + 2);
+        onProgress(parsingProgress);
+      }, 650);
+    };
+    request.onerror = () => {
+      stopTimer();
+      reject(new Error(`${file.name} 上传失败，请检查网络后重试。`));
+    };
+    request.onload = () => {
+      stopTimer();
+      let payload: { content?: string; error?: string } = {};
+      try { payload = JSON.parse(request.responseText || "{}"); } catch { /* handled below */ }
+      if (request.status < 200 || request.status >= 300 || !payload.content) {
+        reject(new Error(payload.error || `${file.name} 无法读取。`));
+        return;
+      }
+      onProgress(100);
+      resolve({ content: payload.content });
+    };
+    request.open("POST", "/api/free-chat/file");
+    request.send(formData);
   });
 }
 

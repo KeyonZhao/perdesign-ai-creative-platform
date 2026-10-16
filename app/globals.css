@@ -2883,11 +2883,12 @@ textarea {
 .free-composer-note { margin: 7px 0 0; color: rgba(255,255,255,.25); font-size: 9px; text-align: center; }
 
 .free-attachment-strip { display: flex; gap: 8px; overflow-x: auto; padding: 10px 5px 8px; }
-.free-attachment { position: relative; display: flex; min-width: 170px; max-width: 220px; height: 52px; align-items: center; gap: 9px; border: 1px solid rgba(255,255,255,.11); border-radius: 14px; background: rgba(30,30,35,.97); padding: 7px 30px 7px 8px; box-shadow: 0 10px 28px rgba(0,0,0,.24); }
+.free-attachment { position: relative; display: flex; min-width: 170px; max-width: 220px; height: 58px; align-items: center; gap: 9px; overflow: hidden; border: 1px solid rgba(255,255,255,.11); border-radius: 14px; background: rgba(30,30,35,.97); padding: 7px 30px 9px 8px; box-shadow: 0 10px 28px rgba(0,0,0,.24); }
 .free-attachment > img, .free-attachment > svg { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 8px; object-fit: cover; color: #9c8dff; }
 .free-attachment > span { display: flex; min-width: 0; flex-direction: column; }
 .free-attachment b { overflow: hidden; color: rgba(255,255,255,.78); font-size: 10px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
 .free-attachment small { margin-top: 3px; color: rgba(255,255,255,.3); font-size: 8px; }
+.free-attachment-progress { position: absolute; right: 8px; bottom: 3px; left: 8px; width: 0; height: 2px; border-radius: 999px; background: linear-gradient(90deg, #7563ff, #b7adff); transition: width 220ms ease; }
 .free-attachment button { position: absolute; top: 5px; right: 5px; display: grid; width: 20px; height: 20px; place-items: center; border: 0; border-radius: 50%; background: rgba(0,0,0,.35); color: rgba(255,255,255,.55); }
 .free-attachment button svg { width: 11px; height: 11px; }
 
@@ -3826,6 +3827,46 @@ textarea {
   margin-bottom: 10px;
 }
 
+.research-chip-stack .research-file-chip {
+  position: relative;
+  width: 220px;
+  height: 58px;
+  flex: 0 1 220px;
+  border-color: rgba(255,255,255,.11);
+  border-radius: 14px;
+  background: rgba(30,30,35,.97);
+  padding: 7px 30px 9px 8px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.24);
+}
+
+.research-chip-stack .research-file-chip:hover {
+  border-color: rgba(139,121,255,.34);
+  background: rgba(35,34,43,.98);
+}
+
+.research-chip-stack .research-file-chip > svg:not(.research-file-remove) {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: #9c8dff;
+}
+
+.research-chip-stack .research-file-thumb {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  border-radius: 8px;
+}
+
+.research-chip-stack .research-file-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 13px;
+  height: 13px;
+  color: rgba(255,255,255,.42);
+}
+
 .research-source-row {
   margin-top: 7px;
 }
@@ -4044,6 +4085,47 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.research-file-info {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.research-file-info small {
+  overflow: hidden;
+  color: rgba(255,255,255,.35);
+  font-size: 8px;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-file-info small.error { color: rgba(255,145,157,.82); }
+
+.research-file-progress {
+  position: absolute;
+  right: 9px;
+  bottom: 3px;
+  left: 9px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+}
+
+.research-file-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7563ff, #b7adff);
+  transition: width 220ms ease;
+}
+
+.research-chip.dismissible.research-file-chip { position: relative; }
 
 .research-file-thumb {
   width: 28px;
