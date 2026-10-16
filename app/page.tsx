@@ -42,6 +42,7 @@ import {
 } from "@/lib/local-gallery";
 import { exportPerdesignProject, importPerdesignProject } from "@/lib/project-backup";
 import { convertImageDataUrlToPng, prepareImageForVision, prepareLocalEditImages } from "@/lib/image";
+import { extractPdfTextInBrowser } from "@/lib/client-pdf";
 import { buildCreativeDivergencePrompt } from "@/lib/creative-divergence";
 import { buildEcommercePosterPrompt } from "@/lib/ecommerce-poster";
 import { downloadResearchWord } from "@/lib/research-word";
@@ -2325,6 +2326,12 @@ export default function Home() {
             throw new Error(`${file.name} 超过 25MB，请压缩后重新上传。`);
           }
           if (!file.type.startsWith("image/")) {
+            if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+              const content = await extractPdfTextInBrowser(file, (progress) => {
+                updatePendingFile(pending.id!, { progress });
+              });
+              return { ...pending, extractedText: content, status: "ready", progress: 100 } satisfies ResearchFile;
+            }
             const payload = await uploadResearchDocument(file, (progress) => {
               updatePendingFile(pending.id!, { progress });
             });

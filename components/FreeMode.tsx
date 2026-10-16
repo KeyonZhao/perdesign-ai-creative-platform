@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Bot, Download, FileText, Loader2, MessageSquare, Paperclip, Plus, SendHorizontal, Trash2, X } from "lucide-react";
 import { prepareImageForVision } from "@/lib/image";
+import { extractPdfTextInBrowser } from "@/lib/client-pdf";
 import { makeId } from "@/lib/utils";
 
 const MAX_ATTACHMENTS = 20;
@@ -158,6 +159,10 @@ export function FreeMode({
           updatePending(placeholder.id, { progress: 68 });
           const dataUrl = await prepareImageForVision(original, 1800, 0.84, 1_200_000);
           return { ...placeholder, dataUrl, status: "ready" as const, progress: 100 };
+        }
+        if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+          const content = await extractPdfTextInBrowser(file, (progress) => updatePending(placeholder.id, { progress }));
+          return { ...placeholder, extractedText: content, status: "ready" as const, progress: 100 };
         }
         const payload = await uploadFreeModeDocument(file, (progress) => updatePending(placeholder.id, { progress }));
         return {
