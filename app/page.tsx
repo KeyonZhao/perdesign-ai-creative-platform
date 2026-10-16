@@ -24,6 +24,7 @@ import {
   X
 } from "lucide-react";
 import { ControlPanel } from "@/components/ControlPanel";
+import { FreeMode } from "@/components/FreeMode";
 import { Gallery } from "@/components/Gallery";
 import { ResearchMindMapModal, type MindMapRevisionRequest, type MindMapTreeData } from "@/components/ResearchMindMapModal";
 import { Toast } from "@/components/Toast";
@@ -80,7 +81,7 @@ const storageKeys = {
   innovationLevel: "product-workstation-innovation-level"
 };
 
-const BRAIN_MODEL = "gpt-5.5";
+const BRAIN_MODEL = "gpt-5.6-sol";
 const AUTH_CODE = "perdesignsg";
 const DEFAULT_IMAGE_API_BASE_URL = "https://task-api-1.65535.space/apimart/v1";
 const DEFAULT_CHAT_API_BASE_URL = "https://api2.65535.space/v1";
@@ -94,7 +95,7 @@ const researchScrollPositions = new Map<string, number>();
 const RESEARCH_WELCOME_MESSAGE =
   "你好，我是品物 AI 策划师。你可以从项目想法、现有问题或希望达成的目标开始说起。";
 
-type WorkspaceSection = "research" | "design" | "vent" | "mindmap" | "api";
+type WorkspaceSection = "free" | "research" | "design" | "vent" | "mindmap" | "api";
 type ActiveMindMap = {
   message: ResearchMessage;
   tree: MindMapTreeData;
@@ -2285,9 +2286,12 @@ export default function Home() {
       pushToast("error", "支持图片、PDF、DOCX、TXT 和 Markdown 文件。其他文件已跳过。");
     }
     if (!supportedFiles.length) return;
+    if (supportedFiles.some((file) => !file.type.startsWith("image/"))) {
+      pushToast("info", "正在读取 PDF 或 Word 正文，请稍候。");
+    }
 
     try {
-      const next = await Promise.all(
+      const results = await Promise.allSettled(
         supportedFiles.map(async (file) => {
           if (file.size > 25 * 1024 * 1024) {
             throw new Error(`${file.name} 超过 25MB，请压缩后重新上传。`);
@@ -2310,7 +2314,19 @@ export default function Home() {
           } satisfies ResearchFile;
         })
       );
-      setResearchFiles((current) => [...current, ...next].slice(0, 4));
+      const next: ResearchFile[] = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : []
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected"
+          ? [result.reason instanceof Error ? result.reason.message : "文件无法读取。"]
+          : []
+      );
+      if (next.length) {
+        setResearchFiles((current) => [...current, ...next].slice(0, 4));
+        pushToast("success", `已读取 ${next.length} 个文件，可以发送给策划助手。`);
+      }
+      if (failures.length) pushToast("error", failures.join("；"));
     } catch (error) {
       pushToast("error", error instanceof Error ? error.message : "附件读取失败，请更换文件后重试。");
     }
@@ -2370,6 +2386,20 @@ export default function Home() {
           </aside>
 
           <div className="workspace-main">
+            <section className={activeSection === "free" ? "section-surface free-editor" : "hidden"}>
+              <FreeMode
+                authorized={isAuthorized}
+                apiKey={PRESET_CHAT_API_KEY}
+                baseUrl={DEFAULT_CHAT_API_BASE_URL}
+                model={BRAIN_MODEL}
+                imageApiKey={PRESET_IMAGE_API_KEY}
+                imageApiBaseUrl={DEFAULT_IMAGE_API_BASE_URL}
+                imageModel={imageModel}
+                onNeedAuth={() => openAuthModal()}
+                onToast={pushToast}
+              />
+            </section>
+
             <section className={activeSection === "design" ? "section-surface design-editor" : "hidden"}>
               <div className="design-workspace">
                 <button
@@ -2520,7 +2550,7 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        <span className="app-version" aria-label="当前版本 v1.0.7">v1.0.7</span>
+        <span className="app-version" aria-label="当前版本 v1.0.8">v1.0.8</span>
       </main>
       <AuthCodeModal
         open={isAuthModalOpen}
@@ -2556,6 +2586,14 @@ function WorkspaceNav({
         </div>
 
         <div className="workspace-nav-group">
+          <button
+            type="button"
+            className={`workspace-nav-item ${activeSection === "free" ? "active" : ""}`}
+            onClick={() => onChange("free")}
+          >
+            <Sparkles className="h-4 w-4" />
+            <span>自由模式</span>
+          </button>
           <button
             type="button"
             className={`workspace-nav-item ${activeSection === "research" ? "active" : ""}`}
@@ -2784,7 +2822,26 @@ function ResearchSection({
 
   return (
     <section className="section-surface">
-      <div className="research-workspace">
+      <div
+        className={`research-workspace ${isDragOver ? "drag-active" : ""}`}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          setIsDragOver(true);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          setIsDragOver(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragOver(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setIsDragOver(false);
+          void addFiles(event.dataTransfer.files);
+        }}
+      >
         <aside className="research-history-sidebar">
           <div className="research-history-heading">
             <div>
@@ -3017,7 +3074,7 @@ function ResearchSection({
                   {message.files.map((file, index) => (
                     <span key={`${message.id}-${file.name}-${index}`} className="research-chip research-file-chip">
                       {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileDown className="h-3.5 w-3.5" />}
-                      {file.name}
+                      <span className="research-file-name">{file.name}</span>
                     </span>
                   ))}
                 </div>
@@ -3039,28 +3096,7 @@ function ResearchSection({
           ) : null}
         </div>
 
-        <div
-          className={`research-composer ${isDragOver ? "drag-active" : ""}`}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            setIsDragOver(true);
-          }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "copy";
-            setIsDragOver(true);
-          }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-              setIsDragOver(false);
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            setIsDragOver(false);
-            void addFiles(event.dataTransfer.files);
-          }}
-        >
+        <div className={`research-composer ${isDragOver ? "drag-active" : ""}`}>
           {files.length ? (
             <div className="research-chip-row research-chip-stack">
               {files.map((file, index) => (
@@ -3072,7 +3108,7 @@ function ResearchSection({
                   title="点击移除"
                 >
                   {file.dataUrl ? <img src={file.dataUrl} alt="" className="research-file-thumb" /> : <FileDown className="h-3.5 w-3.5" />}
-                  {file.name}
+                  <span className="research-file-name">{file.name}</span>
                 </button>
               ))}
             </div>

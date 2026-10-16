@@ -31,7 +31,7 @@ type ResearchReply = {
 };
 
 const PROJECT_BRIEF_LINK = "https://keyonzhao.github.io/perdesign/";
-const RESEARCH_FALLBACK_MODEL = process.env.PERDESIGN_RESEARCH_FALLBACK_MODEL?.trim() || "gpt-6-astra";
+const RESEARCH_FALLBACK_MODEL = process.env.PERDESIGN_RESEARCH_FALLBACK_MODEL?.trim() || "gpt-5.6-sol";
 
 const PROJECT_DISCOVERY_PROTOCOL = [
   "项目访谈协议（正式策划开始前必须执行）：",
@@ -220,7 +220,7 @@ export async function generateResearchReply(params: {
 
 function isRetryableResearchModelError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /server_error|upstream|temporarily|overload|overloaded|servers? (?:are )?(?:currently )?(?:busy|overloaded)|rate.?limit|too many requests|concurrency limit|暂时不可用|服务器繁忙|服务繁忙|过载|限流|请求过多|没有返回有效文本|abort|timeout|超时|processing your request/i.test(message);
+  return /server_error|upstream|temporarily|overload|overloaded|servers? (?:are )?(?:currently )?(?:busy|overloaded)|rate.?limit|too many requests|concurrency limit|not authorized for model|model.*(?:not found|unavailable|not supported)|permission.*model|无权.*模型|模型.*(?:无权限|不可用)|暂时不可用|服务器繁忙|服务繁忙|过载|限流|请求过多|没有返回有效文本|abort|timeout|超时|processing your request/i.test(message);
 }
 
 function wait(ms: number) {

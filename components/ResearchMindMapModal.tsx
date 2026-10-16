@@ -596,7 +596,7 @@ export function ResearchMindMapModal({
     }];
     zip.file("content.json", JSON.stringify(content));
     zip.file("metadata.json", JSON.stringify({
-      creator: { name: "Perdesign AI", version: "1.0.7" },
+      creator: { name: "Perdesign AI", version: "1.0.8" },
       activeSheetId: sheetId
     }));
     zip.file("manifest.json", JSON.stringify({

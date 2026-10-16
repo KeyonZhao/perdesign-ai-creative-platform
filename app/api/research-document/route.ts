@@ -29,8 +29,8 @@ export async function POST(request: Request) {
     }
 
     const normalized = normalizeExtractedText(content).slice(0, MAX_TEXT_LENGTH);
-    if (normalized.length < 280) {
-      throw new Error("文件中提取到的正文过少，可能是扫描版 PDF 或文件内容为空。");
+    if (normalized.length < 20) {
+      throw new Error("文件中没有识别到可用文字。若是扫描版 PDF，请先进行 OCR 文字识别后重新上传。");
     }
     return NextResponse.json({
       content: normalized,
