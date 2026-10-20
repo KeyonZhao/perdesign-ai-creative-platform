@@ -420,14 +420,15 @@ export default function Home() {
     void Promise.allSettled(
       pendingJobs.map(async (job) => {
         try {
-          const imageBase64 = await pollImageJob(job.jobId, config);
+          const imageResult = await pollImageJob(job.jobId, config);
           if (cancelled) return;
           removePendingImageJob(job.jobId);
           await upsertRecoveredJobResult(job, {
             id: `async-job-${job.jobId}`,
             title: `Concept ${String(job.sequence).padStart(2, "0")}`,
             prompt: job.prompt,
-            imageBase64
+            imageBase64: imageResult.imageBase64,
+            publicImageUrl: imageResult.imageUrl
           });
         } catch (error) {
           if (cancelled) return;
@@ -629,10 +630,13 @@ export default function Home() {
         const data = await readApiResponse<{
           status?: "pending" | "running" | "done" | "failed";
           imageBase64?: string;
+          imageUrl?: string;
           error?: string;
         }>(response);
 
-        if (data.status === "done" && data.imageBase64) return data.imageBase64;
+        if (data.status === "done" && data.imageBase64 && data.imageUrl) {
+          return { imageBase64: data.imageBase64, imageUrl: data.imageUrl };
+        }
         if (data.status === "failed" || response.status === 422) {
           throw new TerminalImageJobError(data.error || "图片生成任务失败。");
         }
@@ -1195,13 +1199,14 @@ export default function Home() {
           sequence,
           createdAt: Date.now()
         });
-        const imageBase64 = await pollImageJob(submittedJobId, config);
+        const imageResult = await pollImageJob(submittedJobId, config);
         removePendingImageJob(submittedJobId);
         return {
           id: `async-job-${submittedJobId}`,
           title: "",
           prompt,
-          imageBase64
+          imageBase64: imageResult.imageBase64,
+          publicImageUrl: imageResult.imageUrl
         };
       } catch (error) {
         if (submittedJobId && error instanceof TerminalImageJobError) {
@@ -1576,11 +1581,14 @@ export default function Home() {
     pushToast("info", "视频任务已创建，完成后会自动更新到画廊。");
 
     try {
-      const preparedImage = await prepareImageForVision(result.imageBase64, 1600, 0.84);
+      const preparedImage = result.publicImageUrl
+        ? undefined
+        : await prepareImageForVision(result.imageBase64, 1600, 0.82, 3_500_000);
       const createResponse = await fetch("/api/video/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          imageUrl: result.publicImageUrl,
           imageBase64: preparedImage,
           prompt: request.prompt,
           ratio: request.ratio,

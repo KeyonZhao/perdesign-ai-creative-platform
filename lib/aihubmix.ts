@@ -24,7 +24,7 @@ export type AsyncImageSubmission = {
 
 export type AsyncImageJob =
   | { status: "pending" | "running"; jobId: string }
-  | { status: "done"; jobId: string; imageBase64: string }
+  | { status: "done"; jobId: string; imageBase64: string; imageUrl: string }
   | { status: "failed"; jobId: string; error: string };
 
 type ChatMessage = {
@@ -805,7 +805,7 @@ export async function getAsyncImageJob(params: {
     params.apiKey,
     "images/async-generations"
   );
-  return { status: "done", jobId, imageBase64 };
+  return { status: "done", jobId, imageBase64, imageUrl: resultUrl };
 }
 
 function buildImageEditPrompt(

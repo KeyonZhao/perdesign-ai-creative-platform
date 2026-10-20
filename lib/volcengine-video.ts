@@ -1,5 +1,5 @@
-const DEFAULT_VIDEO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-const DEFAULT_VIDEO_MODEL = "doubao-seedance-2-0-260128";
+const DEFAULT_VIDEO_BASE_URL = "https://task-api-1-cn.65535.space";
+const DEFAULT_VIDEO_MODEL = "sd-v2-720";
 
 export function getVolcengineVideoConfig() {
   const apiKey = process.env.PERDESIGN_VIDEO_API_KEY?.trim();
@@ -18,10 +18,11 @@ export function getVolcengineVideoConfig() {
   };
 }
 
-export function volcengineVideoHeaders(apiKey: string) {
+export function volcengineVideoHeaders(apiKey: string, idempotencyKey?: string) {
   return {
     Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {})
   };
 }
 

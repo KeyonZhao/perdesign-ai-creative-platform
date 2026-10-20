@@ -11,9 +11,9 @@ export const maxDuration = 60;
 type VideoTaskResponse = {
   id?: string;
   status?: string;
-  content?: {
-    video_url?: string;
-  };
+  progress?: number;
+  video_url?: string;
+  download_url?: string;
   error?: {
     code?: string;
     message?: string;
@@ -28,21 +28,22 @@ export async function GET(request: Request) {
     }
 
     const config = getVolcengineVideoConfig();
-    const response = await fetch(`${config.baseUrl}/contents/generations/tasks/${taskId}`, {
+    const response = await fetch(`${config.baseUrl}/v1/videos/${taskId}`, {
       method: "GET",
       headers: volcengineVideoHeaders(config.apiKey),
       cache: "no-store"
     });
     const payload = await readVolcengineVideoResponse<VideoTaskResponse>(response);
     const status = normalizeStatus(payload.status);
-    const videoUrl = typeof payload.content?.video_url === "string"
-      ? payload.content.video_url
+    const videoUrl = typeof payload.video_url === "string"
+      ? payload.video_url
       : undefined;
     const error = [payload.error?.code, payload.error?.message].filter(Boolean).join("：");
 
     return NextResponse.json({
       taskId: payload.id || taskId,
       status,
+      progress: typeof payload.progress === "number" ? payload.progress : undefined,
       videoUrl,
       error: error || undefined
     });
@@ -55,9 +56,9 @@ export async function GET(request: Request) {
 }
 
 function normalizeStatus(status?: string) {
-  if (status === "succeeded") return "succeeded";
+  if (status === "completed" || status === "succeeded") return "succeeded";
   if (status === "failed") return "failed";
   if (status === "cancelled") return "cancelled";
-  if (status === "running") return "running";
+  if (status === "in_progress" || status === "running") return "running";
   return "queued";
 }

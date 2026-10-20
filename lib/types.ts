@@ -22,6 +22,7 @@ export type GenerationResult = ConceptPrompt & {
   id: string;
   assetType?: "image" | "model3d" | "video";
   imageBase64?: string;
+  publicImageUrl?: string;
   modelBlob?: Blob;
   modelTaskId?: string;
   videoUrl?: string;

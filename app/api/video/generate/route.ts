@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { put } from "@vercel/blob";
 import {
   getVolcengineVideoConfig,
   readVolcengineVideoResponse,
@@ -19,6 +20,7 @@ type CreateVideoResponse = {
 export async function POST(request: Request) {
   try {
     const body = await request.json() as {
+      imageUrl?: unknown;
       imageBase64?: unknown;
       prompt?: unknown;
       ratio?: unknown;
@@ -26,9 +28,21 @@ export async function POST(request: Request) {
       resolution?: unknown;
     };
 
-    if (typeof body.imageBase64 !== "string" || !body.imageBase64.startsWith("data:image/")) {
-      return NextResponse.json({ error: "缺少可用于视频首帧的图片。" }, { status: 400 });
+    const suppliedImageUrl =
+      typeof body.imageUrl === "string" && /^https:\/\//i.test(body.imageUrl)
+        ? body.imageUrl
+        : "";
+    const suppliedImageBase64 =
+      typeof body.imageBase64 === "string" && body.imageBase64.startsWith("data:image/")
+        ? body.imageBase64
+        : "";
+    if (!suppliedImageUrl && !suppliedImageBase64) {
+      return NextResponse.json(
+        { error: "缺少可用于视频首帧的图片。" },
+        { status: 400 }
+      );
     }
+    const imageUrl = suppliedImageUrl || await uploadVideoReference(suppliedImageBase64);
 
     const prompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 2000) : "";
     const ratio = typeof body.ratio === "string" && ALLOWED_RATIOS.has(body.ratio)
@@ -42,26 +56,16 @@ export async function POST(request: Request) {
         ? body.resolution
         : "720p";
     const config = getVolcengineVideoConfig();
-    const response = await fetch(`${config.baseUrl}/contents/generations/tasks`, {
+    const response = await fetch(`${config.baseUrl}/v1/videos`, {
       method: "POST",
-      headers: volcengineVideoHeaders(config.apiKey),
+      headers: volcengineVideoHeaders(config.apiKey, `perdesign-video-${crypto.randomUUID()}`),
       body: JSON.stringify({
         model: config.model,
-        content: [
-          {
-            type: "text",
-            text: prompt
-          },
-          {
-            type: "image_url",
-            image_url: { url: body.imageBase64 },
-            role: "first_frame"
-          }
-        ],
-        ratio,
-        duration,
+        prompt,
+        seconds: duration,
+        aspect_ratio: ratio,
         resolution,
-        watermark: false
+        images: [imageUrl]
       }),
       cache: "no-store"
     });
@@ -76,4 +80,26 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+}
+
+async function uploadVideoReference(dataUrl: string) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN?.trim()) {
+    throw new Error("服务器尚未配置 Blob 图片中转存储，请先关联 Vercel Blob。 ");
+  }
+
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/.exec(dataUrl);
+  if (!match) throw new Error("视频参考图格式无效。");
+  const contentType = match[1];
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > 4_000_000) {
+    throw new Error("视频参考图过大，请压缩到 4MB 以内后重试。");
+  }
+
+  const extension = contentType === "image/jpeg" ? "jpg" : contentType === "image/webp" ? "webp" : "png";
+  const blob = await put(`video-references/reference.${extension}`, buffer, {
+    access: "public",
+    addRandomSuffix: true,
+    contentType
+  });
+  return blob.url;
 }
