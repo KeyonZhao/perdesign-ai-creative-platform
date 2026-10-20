@@ -8,14 +8,17 @@ const COLORS = ["#ff3b30", "#ffcc00", "#34c759", "#00c7be", "#0a84ff", "#af52de"
 export function FreeImageAnnotationModal({
   image,
   onChange,
-  onClose
+  onCancel,
+  onDone
 }: {
   image: string;
   onChange: (nextImage: string) => void;
-  onClose: () => void;
+  onCancel: () => void;
+  onDone: () => void;
 }) {
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const toolCursorRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef(false);
   const historyRef = useRef<string[]>([]);
   const [color, setColor] = useState(COLORS[0]);
@@ -26,11 +29,11 @@ export function FreeImageAnnotationModal({
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCancel();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onCancel]);
 
   function initializeCanvas() {
     const source = imageRef.current;
@@ -73,11 +76,26 @@ export function FreeImageAnnotationModal({
   }
 
   function drawStroke(event: React.PointerEvent<HTMLCanvasElement>) {
+    updateToolCursor(event);
     if (!drawingRef.current) return;
     const context = canvasRef.current!.getContext("2d")!;
     const point = pointFromEvent(event);
     context.lineTo(point.x, point.y);
     context.stroke();
+  }
+
+  function updateToolCursor(event: React.PointerEvent<HTMLCanvasElement>) {
+    const cursor = toolCursorRef.current;
+    const canvas = canvasRef.current;
+    if (!cursor || !canvas) return;
+    const bounds = canvas.getBoundingClientRect();
+    cursor.style.left = `${event.clientX - bounds.left}px`;
+    cursor.style.top = `${event.clientY - bounds.top}px`;
+    cursor.style.opacity = "1";
+  }
+
+  function hideToolCursor() {
+    if (toolCursorRef.current) toolCursorRef.current.style.opacity = "0";
   }
 
   function endStroke(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -121,17 +139,26 @@ export function FreeImageAnnotationModal({
         <header className="free-annotation-header">
           <strong>标注图片</strong>
           <span>标注结果会自动更新到下一条消息的附件中</span>
-          <button type="button" onClick={onClose} aria-label="关闭标注"><X /></button>
+          <button type="button" onClick={onCancel} aria-label="关闭并放弃本次标注"><X /></button>
         </header>
         <div className="free-annotation-stage">
           <div className="free-annotation-canvas-wrap">
             <img ref={imageRef} src={image} alt="待标注图片" onLoad={initializeCanvas} />
             <canvas
               ref={canvasRef}
+              className="tool-cursor-active"
               onPointerDown={beginStroke}
+              onPointerEnter={updateToolCursor}
               onPointerMove={drawStroke}
               onPointerUp={endStroke}
               onPointerCancel={endStroke}
+              onPointerLeave={hideToolCursor}
+            />
+            <div
+              ref={toolCursorRef}
+              className="free-annotation-tool-cursor"
+              style={{ width: size, height: size, borderColor: tool === "brush" ? color : "rgba(255,255,255,.95)" }}
+              aria-hidden="true"
             />
           </div>
         </div>
@@ -158,7 +185,7 @@ export function FreeImageAnnotationModal({
             <input type="range" min="2" max="32" step="1" value={size} onChange={(event) => setSize(Number(event.target.value))} />
             <b>{size}</b>
           </label>
-          <button type="button" className="free-annotation-done" onClick={onClose}><Check />完成</button>
+          <button type="button" className="free-annotation-done" onClick={onDone}><Check />完成</button>
         </footer>
       </div>
     </div>

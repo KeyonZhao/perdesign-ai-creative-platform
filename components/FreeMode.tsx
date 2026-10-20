@@ -71,7 +71,11 @@ export function FreeMode({
   const [isResponding, setIsResponding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ image: string; messageId?: string; imageIndex?: number } | null>(null);
-  const [annotationTarget, setAnnotationTarget] = useState<{ attachmentId: string; image: string } | null>(null);
+  const [annotationTarget, setAnnotationTarget] = useState<{
+    attachmentId: string;
+    image: string;
+    previousAttachment?: FreeAttachment;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -153,7 +157,7 @@ export function FreeMode({
         ? current.map((item) => item.id === attachmentId ? nextAttachment : item)
         : [...current, nextAttachment];
     });
-    setAnnotationTarget({ attachmentId, image: nextImage });
+    setAnnotationTarget({ attachmentId, image: nextImage, previousAttachment: existing });
     onToast("info", "图片已加入下一条消息，标注内容会自动更新。 ");
   }
 
@@ -165,6 +169,19 @@ export function FreeMode({
       status: "ready",
       progress: 100
     } : item));
+  }
+
+  function cancelAnnotation() {
+    if (!annotationTarget) return;
+    setAttachments((current) => {
+      if (!annotationTarget.previousAttachment) {
+        return current.filter((item) => item.id !== annotationTarget.attachmentId);
+      }
+      return current.map((item) => item.id === annotationTarget.attachmentId
+        ? annotationTarget.previousAttachment!
+        : item);
+    });
+    setAnnotationTarget(null);
   }
 
   async function addFiles(files: FileList | File[] | null) {
@@ -481,7 +498,8 @@ export function FreeMode({
         <FreeImageAnnotationModal
           image={annotationTarget.image}
           onChange={(image) => updateAnnotation(annotationTarget.attachmentId, image)}
-          onClose={() => setAnnotationTarget(null)}
+          onCancel={cancelAnnotation}
+          onDone={() => setAnnotationTarget(null)}
         />
       ) : null}
       </div>

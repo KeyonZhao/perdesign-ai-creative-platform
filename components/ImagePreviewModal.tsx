@@ -106,6 +106,7 @@ export function ImagePreviewModal({
   const [imagePromptReferences, setImagePromptReferences] = useState<GenerationSourceImage[]>([]);
   const [annotationImage, setAnnotationImage] = useState("");
   const [isAnnotating, setIsAnnotating] = useState(false);
+  const annotationPreviousReferencesRef = useRef<GenerationSourceImage[]>([]);
   const [imagePromptUploadError, setImagePromptUploadError] = useState("");
   const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
   const [isVideoPanelOpen, setIsVideoPanelOpen] = useState(false);
@@ -746,6 +747,7 @@ export function ImagePreviewModal({
 
   function openAnnotation() {
     if (!result?.imageBase64) return;
+    annotationPreviousReferencesRef.current = imagePromptReferences.map((image) => ({ ...image }));
     const existing = imagePromptReferences.find((image) => image.name === ANNOTATION_REFERENCE_NAME);
     const nextImage = existing?.dataUrl || result.imageBase64;
     setAnnotationImage(nextImage);
@@ -761,10 +763,15 @@ export function ImagePreviewModal({
   }
 
   function updateAnnotationReference(nextImage: string) {
-    setAnnotationImage(nextImage);
     setImagePromptReferences((current) => current.map((image) => image.name === ANNOTATION_REFERENCE_NAME
       ? { ...image, dataUrl: nextImage }
       : image));
+  }
+
+  function cancelAnnotation() {
+    setImagePromptReferences(annotationPreviousReferencesRef.current);
+    setIsAnnotating(false);
+    setAnnotationImage("");
   }
 
   async function readDivergenceReference(file?: File) {
@@ -1902,7 +1909,8 @@ export function ImagePreviewModal({
         <FreeImageAnnotationModal
           image={annotationImage}
           onChange={updateAnnotationReference}
-          onClose={() => setIsAnnotating(false)}
+          onCancel={cancelAnnotation}
+          onDone={() => setIsAnnotating(false)}
         />
       ) : null}
     </div>
