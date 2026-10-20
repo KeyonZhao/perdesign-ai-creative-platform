@@ -83,10 +83,6 @@ export async function POST(request: Request) {
 }
 
 async function uploadVideoReference(dataUrl: string) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN?.trim()) {
-    throw new Error("服务器尚未配置 Blob 图片中转存储，请先关联 Vercel Blob。 ");
-  }
-
   const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/.exec(dataUrl);
   if (!match) throw new Error("视频参考图格式无效。");
   const contentType = match[1];
