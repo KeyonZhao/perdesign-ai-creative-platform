@@ -1,5 +1,5 @@
 const DEFAULT_VIDEO_BASE_URL = "https://task-api-1-cn.65535.space";
-const DEFAULT_VIDEO_MODEL = "sd-v2-720";
+const DEFAULT_VIDEO_MODEL = "seedance-2.0-native";
 
 export function getVolcengineVideoConfig() {
   const apiKey = process.env.PERDESIGN_VIDEO_API_KEY?.trim();
