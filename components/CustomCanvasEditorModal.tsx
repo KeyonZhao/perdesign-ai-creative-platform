@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Box, ChevronUp, Clapperboard, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
+import { Box, ChevronUp, Clapperboard, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { downloadDataUrl, getGalleryDraggedImage } from "@/lib/image";
 import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceExplorationLevel, DivergenceMode, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage, VideoGenerationRequest } from "@/lib/types";
@@ -26,6 +26,7 @@ type CustomCanvasEditorModalProps = {
   onGenerateScene: (request: CustomCanvasGenerationRequest) => void;
   onGenerateEcommercePoster: (request: CustomCanvasGenerationRequest, instruction?: string) => void;
   onGenerateVideo: (request: CustomCanvasGenerationRequest, videoRequest: VideoGenerationRequest) => void;
+  onUpscale: (request: CustomCanvasGenerationRequest) => void;
   onOpenModelPanel: (request: CustomCanvasGenerationRequest) => void;
   onGenerateDivergence: (
     request: CustomCanvasGenerationRequest,
@@ -47,6 +48,7 @@ export function CustomCanvasEditorModal({
   onGenerateScene,
   onGenerateEcommercePoster,
   onGenerateVideo,
+  onUpscale,
   onOpenModelPanel,
   onGenerateDivergence,
   onError,
@@ -390,6 +392,19 @@ export function CustomCanvasEditorModal({
             >
               <Box className="h-4 w-4" />
               <span>生成3D模型</span>
+            </button>
+            <button
+              className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => {
+                const request = getCurrentRequest();
+                if (!request) return;
+                onUpscale(request);
+              }}
+              disabled={!sourceImage || busy}
+              title="使用 SeedVR2-7B 高清放大 2 倍"
+            >
+              <ScanLine className="h-4 w-4" />
+              <span>高清放大</span>
             </button>
             <button
               className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"

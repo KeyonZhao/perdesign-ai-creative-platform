@@ -10,6 +10,8 @@ import type { CreativeDivergenceRequest, DivergenceExplorationLevel, DivergenceM
 import { downloadDataUrl, prepareImageFileDrag, releaseImageFileDrag } from "@/lib/image";
 import { TripoModelViewer } from "./TripoModelViewer";
 import { VideoGenerationPanel } from "./VideoGenerationPanel";
+import { FreeImageAnnotationModal } from "./FreeImageAnnotationModal";
+import { AnnotationIcon } from "./AnnotationIcon";
 
 type ImagePreviewModalProps = {
   isGeneratingVariant?: boolean;
@@ -52,6 +54,7 @@ const LEGACY_MULTI_VIEW_PROMPT =
   "生成这个产品的多视角图片，画面最右侧是产品的斜侧透视图，左侧包含产品正视图、左视图、后视图、顶视图。";
 const LEGACY_LOCAL_EDIT_PROMPT_PREFIX = "请仅修改透明蒙版标记的涂抹区域。";
 const LOCAL_EDIT_USER_PROMPT_MARKER = "用户对涂抹区域的修改要求：";
+const ANNOTATION_REFERENCE_NAME = "当前图片标注.png";
 
 export function ImagePreviewModal({
   result,
@@ -101,6 +104,8 @@ export function ImagePreviewModal({
   const [instruction, setInstruction] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
   const [imagePromptReferences, setImagePromptReferences] = useState<GenerationSourceImage[]>([]);
+  const [annotationImage, setAnnotationImage] = useState("");
+  const [isAnnotating, setIsAnnotating] = useState(false);
   const [imagePromptUploadError, setImagePromptUploadError] = useState("");
   const [isEcommercePanelOpen, setIsEcommercePanelOpen] = useState(false);
   const [isVideoPanelOpen, setIsVideoPanelOpen] = useState(false);
@@ -739,6 +744,29 @@ export function ImagePreviewModal({
     onGenerateFromPrompt?.(result!, trimmedPrompt, imagePromptReferences.length ? imagePromptReferences : undefined);
   }
 
+  function openAnnotation() {
+    if (!result?.imageBase64) return;
+    const existing = imagePromptReferences.find((image) => image.name === ANNOTATION_REFERENCE_NAME);
+    const nextImage = existing?.dataUrl || result.imageBase64;
+    setAnnotationImage(nextImage);
+    setImagePromptReferences((current) => {
+      const nextReference = { name: ANNOTATION_REFERENCE_NAME, dataUrl: nextImage };
+      const existingIndex = current.findIndex((image) => image.name === ANNOTATION_REFERENCE_NAME);
+      if (existingIndex >= 0) return current.map((image, index) => index === existingIndex ? nextReference : image);
+      if (current.length < 3) return [...current, nextReference];
+      return [...current.slice(0, 2), nextReference];
+    });
+    setImagePromptUploadError("");
+    setIsAnnotating(true);
+  }
+
+  function updateAnnotationReference(nextImage: string) {
+    setAnnotationImage(nextImage);
+    setImagePromptReferences((current) => current.map((image) => image.name === ANNOTATION_REFERENCE_NAME
+      ? { ...image, dataUrl: nextImage }
+      : image));
+  }
+
   async function readDivergenceReference(file?: File) {
     isDivergenceFileDialogOpenRef.current = false;
     keepDivergenceOpen();
@@ -998,6 +1026,15 @@ export function ImagePreviewModal({
             >
               <Paintbrush className="h-4 w-4" />
               <span>局部修改</span>
+            </button>
+            <button
+              className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={openAnnotation}
+              disabled={isGeneratingVariant || isEditing}
+              title="标注图片并作为下一次生成的参考图"
+            >
+              <AnnotationIcon className="h-5 w-5" />
+              <span>标注</span>
             </button>
             <button
               className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
@@ -1861,6 +1898,13 @@ export function ImagePreviewModal({
           </div>
         )}
       </div>
+      {isAnnotating && annotationImage ? (
+        <FreeImageAnnotationModal
+          image={annotationImage}
+          onChange={updateAnnotationReference}
+          onClose={() => setIsAnnotating(false)}
+        />
+      ) : null}
     </div>
   );
 }

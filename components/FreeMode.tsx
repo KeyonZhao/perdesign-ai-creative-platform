@@ -5,6 +5,8 @@ import { Bot, Download, FileText, Loader2, MessageSquare, Paperclip, Plus, SendH
 import { prepareImageForVision } from "@/lib/image";
 import { extractPdfTextInBrowser } from "@/lib/client-pdf";
 import { makeId } from "@/lib/utils";
+import { FreeImageAnnotationModal } from "@/components/FreeImageAnnotationModal";
+import { AnnotationIcon } from "@/components/AnnotationIcon";
 
 const MAX_ATTACHMENTS = 20;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -68,7 +70,8 @@ export function FreeMode({
   const [attachments, setAttachments] = useState<FreeAttachment[]>([]);
   const [isResponding, setIsResponding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [previewImage, setPreviewImage] = useState("");
+  const [previewImage, setPreviewImage] = useState<{ image: string; messageId?: string; imageIndex?: number } | null>(null);
+  const [annotationTarget, setAnnotationTarget] = useState<{ attachmentId: string; image: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -126,6 +129,42 @@ export function FreeMode({
       if (sessionId === activeSessionId) setActiveSessionId(next[0].id);
       return next;
     });
+  }
+
+  function startAnnotation(messageId: string, index: number, image: string) {
+    const attachmentId = `annotation-${messageId}-${index}`;
+    const existing = attachments.find((item) => item.id === attachmentId);
+    if (!existing && attachments.length >= MAX_ATTACHMENTS) {
+      onToast("error", `每条消息最多添加 ${MAX_ATTACHMENTS} 个附件，请先移除一个附件。`);
+      return;
+    }
+    const nextImage = existing?.dataUrl || image;
+    setAttachments((current) => {
+      const nextAttachment: FreeAttachment = {
+        id: attachmentId,
+        name: "标注图片.png",
+        size: estimateDataUrlBytes(nextImage),
+        type: "image/png",
+        dataUrl: nextImage,
+        status: "ready",
+        progress: 100
+      };
+      return current.some((item) => item.id === attachmentId)
+        ? current.map((item) => item.id === attachmentId ? nextAttachment : item)
+        : [...current, nextAttachment];
+    });
+    setAnnotationTarget({ attachmentId, image: nextImage });
+    onToast("info", "图片已加入下一条消息，标注内容会自动更新。 ");
+  }
+
+  function updateAnnotation(attachmentId: string, image: string) {
+    setAttachments((current) => current.map((item) => item.id === attachmentId ? {
+      ...item,
+      dataUrl: image,
+      size: estimateDataUrlBytes(image),
+      status: "ready",
+      progress: 100
+    } : item));
   }
 
   async function addFiles(files: FileList | File[] | null) {
@@ -355,7 +394,7 @@ export function FreeMode({
                         type="button"
                         className="free-message-image"
                         key={file.id}
-                        onClick={() => setPreviewImage(file.dataUrl!)}
+                        onClick={() => setPreviewImage({ image: file.dataUrl! })}
                         aria-label={`放大查看 ${file.name}`}
                       >
                         <img src={file.dataUrl} alt={file.name} />
@@ -371,10 +410,9 @@ export function FreeMode({
                 <div className="free-generated-images">
                   {message.generatedImages.map((image, index) => (
                     <div className="free-generated-image" key={`${message.id}-${index}`}>
-                      <button type="button" className="free-generated-image-open" onClick={() => setPreviewImage(image)} aria-label="放大查看生成图片">
+                      <button type="button" className="free-generated-image-open" onClick={() => setPreviewImage({ image, messageId: message.id, imageIndex: index })} aria-label="放大查看生成图片">
                         <img src={image} alt="AI 生成图片" />
                       </button>
-                      <button type="button" className="free-generated-image-download" onClick={() => downloadImage(image)} aria-label="下载图片"><Download /></button>
                     </div>
                   ))}
                 </div>
@@ -425,14 +463,35 @@ export function FreeMode({
       </div>
       {isDragging ? <div className="free-drop-overlay"><Paperclip /><strong>将文件拖到这里</strong><span>最多添加 20 个附件</span></div> : null}
       {previewImage ? (
-        <div className="free-image-preview" role="dialog" aria-modal="true" onClick={() => setPreviewImage("")}>
-          <button type="button" onClick={() => setPreviewImage("")} aria-label="关闭图片预览"><X /></button>
-          <img src={previewImage} alt="生成图片预览" onClick={(event) => event.stopPropagation()} />
+        <div className="free-image-preview" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}>
+          <div className="free-image-preview-toolbar" onClick={(event) => event.stopPropagation()}>
+            {previewImage.messageId !== undefined && previewImage.imageIndex !== undefined ? (
+              <button type="button" onClick={() => {
+                startAnnotation(previewImage.messageId!, previewImage.imageIndex!, previewImage.image);
+                setPreviewImage(null);
+              }}><AnnotationIcon className="annotation-action-icon" />标注</button>
+            ) : null}
+            <button type="button" onClick={() => downloadImage(previewImage.image)}><Download />下载</button>
+            <button type="button" className="free-image-preview-close" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览"><X /></button>
+          </div>
+          <img src={previewImage.image} alt="生成图片预览" onClick={(event) => event.stopPropagation()} />
         </div>
+      ) : null}
+      {annotationTarget ? (
+        <FreeImageAnnotationModal
+          image={annotationTarget.image}
+          onChange={(image) => updateAnnotation(annotationTarget.attachmentId, image)}
+          onClose={() => setAnnotationTarget(null)}
+        />
       ) : null}
       </div>
     </section>
   );
+}
+
+function estimateDataUrlBytes(dataUrl: string) {
+  const payload = dataUrl.split(",")[1] || "";
+  return Math.max(0, Math.floor(payload.length * 0.75));
 }
 
 function isImageGenerationRequest(value: string, hasImages: boolean) {

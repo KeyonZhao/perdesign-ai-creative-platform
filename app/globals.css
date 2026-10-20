@@ -2739,11 +2739,11 @@ textarea {
 
 .free-generated-image {
   position: relative;
-  overflow: hidden;
   border: 1px solid rgba(255,255,255,.1);
   border-radius: 18px;
   background: #0e0e11;
   box-shadow: 0 16px 45px rgba(0,0,0,.3);
+  overflow: hidden;
 }
 
 .free-generated-image-open {
@@ -2761,26 +2761,41 @@ textarea {
   object-fit: contain;
 }
 
-.free-generated-image-download {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border: 1px solid rgba(255,255,255,.14);
-  border-radius: 10px;
-  background: rgba(15,15,18,.78);
-  color: rgba(255,255,255,.82);
-  opacity: 0;
-  backdrop-filter: blur(12px);
-  transition: opacity 140ms ease, background 140ms ease;
-}
+.free-annotation-backdrop { position: fixed; inset: 0; z-index: 180; display: grid; place-items: center; background: rgba(4,4,7,.88); padding: 20px; backdrop-filter: blur(16px); }
+.free-annotation-modal { display: flex; width: min(1180px, 100%); height: min(860px, calc(100vh - 40px)); min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 22px; background: #17171c; box-shadow: 0 30px 100px rgba(0,0,0,.62); }
+.free-annotation-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; border-bottom: 1px solid rgba(255,255,255,.08); padding: 14px 16px 14px 20px; }
+.free-annotation-header strong { color: #fff; font-size: 14px; }
+.free-annotation-header span { color: rgba(255,255,255,.42); font-size: 11px; }
+.free-annotation-header button { display: grid; width: 34px; height: 34px; place-items: center; border: 0; border-radius: 10px; background: rgba(255,255,255,.06); color: rgba(255,255,255,.68); }
+.free-annotation-header button:hover { background: rgba(255,255,255,.1); color: #fff; }
+.free-annotation-header svg { width: 17px; height: 17px; }
+.free-annotation-stage { display: grid; min-height: 0; flex: 1; place-items: center; overflow: auto; background-color: #101014; background-image: radial-gradient(rgba(255,255,255,.08) 1px, transparent 1px); background-size: 20px 20px; padding: 24px; }
+.free-annotation-canvas-wrap { position: relative; display: inline-flex; max-width: 100%; max-height: 100%; line-height: 0; box-shadow: 0 16px 50px rgba(0,0,0,.42); }
+.free-annotation-canvas-wrap img { display: block; max-width: 100%; max-height: calc(100vh - 190px); object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.free-annotation-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.free-annotation-toolbar { display: flex; min-height: 68px; align-items: center; gap: 16px; border-top: 1px solid rgba(255,255,255,.08); padding: 10px 16px; }
+.free-annotation-tools { display: flex; gap: 6px; }
+.free-annotation-tools button, .free-annotation-done { display: inline-flex; height: 38px; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; background: rgba(255,255,255,.045); padding: 0 12px; color: rgba(255,255,255,.7); font-size: 11px; }
+.free-annotation-tools button.active { border-color: rgba(151,135,255,.55); background: rgba(116,91,232,.24); color: #fff; }
+.free-annotation-tools button:disabled { cursor: default; opacity: .3; }
+.free-annotation-tools svg, .free-annotation-done svg { width: 15px; height: 15px; }
+.free-annotation-colors { display: flex; align-items: center; gap: 7px; }
+.free-annotation-colors button { width: 22px; height: 22px; border: 2px solid transparent; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.22); }
+.free-annotation-colors button.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(116,91,232,.7); }
+.free-annotation-size { display: flex; min-width: 170px; align-items: center; gap: 8px; color: rgba(255,255,255,.48); font-size: 11px; }
+.free-annotation-size input { min-width: 90px; accent-color: #806cff; }
+.free-annotation-size b { min-width: 22px; color: rgba(255,255,255,.75); font-weight: 500; }
+.free-annotation-done { margin-left: auto; border-color: #715ce8; background: #715ce8; color: #fff; }
+.free-annotation-done:hover { background: #806cff; }
 
-.free-generated-image:hover .free-generated-image-download { opacity: 1; }
-.free-generated-image-download:hover { background: rgba(91,70,186,.9); color: #fff; }
-.free-generated-image-download svg { width: 17px; height: 17px; }
+@media (max-width: 760px) {
+  .free-annotation-backdrop { padding: 0; }
+  .free-annotation-modal { height: 100%; border-radius: 0; }
+  .free-annotation-header span { display: none; }
+  .free-annotation-toolbar { flex-wrap: wrap; gap: 8px 12px; }
+  .free-annotation-colors { order: 3; width: 100%; }
+  .free-annotation-size { min-width: 130px; flex: 1; }
+}
 
 .free-image-preview {
   position: fixed;
@@ -2801,21 +2816,28 @@ textarea {
   box-shadow: 0 30px 90px rgba(0,0,0,.55);
 }
 
-.free-image-preview > button {
+.free-image-preview-toolbar {
   position: fixed;
-  top: 20px;
-  right: 22px;
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
+  top: 18px;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  transform: translateX(-50%);
   border: 1px solid rgba(255,255,255,.14);
-  border-radius: 50%;
-  background: rgba(30,30,35,.82);
-  color: #fff;
+  border-radius: 14px;
+  background: rgba(25,25,30,.88);
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.32);
+  backdrop-filter: blur(14px);
 }
 
-.free-image-preview > button svg { width: 20px; height: 20px; }
+.free-image-preview-toolbar button { display: inline-flex; height: 36px; align-items: center; gap: 6px; border: 0; border-radius: 9px; background: transparent; padding: 0 11px; color: rgba(255,255,255,.76); font-size: 12px; }
+.free-image-preview-toolbar button:hover { background: rgba(116,91,232,.24); color: #fff; }
+.free-image-preview-toolbar button.free-image-preview-close { width: 36px; justify-content: center; padding: 0; }
+.free-image-preview-toolbar svg { width: 16px; height: 16px; }
+.free-image-preview-toolbar .annotation-action-icon { width: 21px; height: 21px; }
 
 .free-message-files { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
 .free-message-files .free-message-document { display: inline-flex; max-width: 220px; align-items: center; gap: 7px; border: 1px solid rgba(255,255,255,.09); border-radius: 10px; background: rgba(255,255,255,.035); padding: 7px 9px; }

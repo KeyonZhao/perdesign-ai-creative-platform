@@ -501,6 +501,11 @@ export function Gallery({
             setCustomSourceImage(null);
             onGenerateVideo(createCustomResult(request), videoRequest);
           }}
+          onUpscale={(request) => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+            void onUpscale(createCustomResult(request));
+          }}
           onOpenModelPanel={(request) => {
             setCustomEditorOpen(false);
             setCustomSourceImage(null);
