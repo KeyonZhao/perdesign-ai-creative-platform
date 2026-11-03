@@ -4,13 +4,15 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createAccount, login, requireAccount, checkPassword, hashPassword, requireSameOrigin } from "../lib/accounts";
-import { query } from "../lib/account-db";
+import { createAccount, login, requireAccount, checkPassword, hashPassword, hashToken, requireSameOrigin } from "../lib/accounts";
+import { query, initializeAccountSchema } from "../lib/account-db";
 import { withAccount, auditedFetch } from "../lib/call-audit";
 import { importBilling, parseBillingCsv, costToNano, nanoToCost } from "../lib/billing-import";
 import { GET as overview } from "../app/api/admin/overview/route";
-import { GET as users, PATCH as changeUser } from "../app/api/admin/users/route";
+import { GET as users, POST as addUser, PATCH as changeUser } from "../app/api/admin/users/route";
 import { GET as media } from "../app/api/account/media/route";
+import { POST as register } from "../app/api/auth/register/route";
+import { GET as me } from "../app/api/auth/me/route";
 
 let admin:any, member:any, other:any;
 const origin="http://localhost:3001";
@@ -138,4 +140,86 @@ test("original supplier CSV files remain import-compatible when locally availabl
     let text:string;try{text=await readFile(file,"utf8");}catch{t.skip("Local private CSV not available in this checkout");return;}
     assert(parseBillingCsv(text).length>0);
   }
+});
+
+test("creating and resetting accounts accepts 8 characters and rejects shorter or oversized passwords",async()=>{
+  for(const value of ["short77","x".repeat(129)]) {
+    const response=await addUser(request("/api/admin/users",admin,{username:"eight-test",displayName:"密码长度测试",password:value}));
+    assert.equal(response.status,400);
+    assert.match((await response.json()).error,/8–128/);
+  }
+  assert.equal((await addUser(request("/api/admin/users",admin,{username:"eight-test",displayName:"密码长度测试",password:"eight888"}))).status,200);
+  const original=await login("eight-test","eight888","eight-test-ip");
+  for(const value of ["short77","x".repeat(129)]) {
+    assert.equal((await changeUser(request("/api/admin/users",admin,{id:original.user.id,password:value}))).status,400);
+    assert.equal((await requireAccount(request("/",original))).id,original.user.id);
+  }
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:original.user.id,password:"reset888"}))).status,200);
+  await assert.rejects(requireAccount(request("/",original)),/登录/);
+  assert.equal((await login("eight-test","reset888","eight-test-ip")).user.id,original.user.id);
+});
+
+function registration(username:string,extras:Record<string,unknown>={}) {
+  const req=request("/api/auth/register",null,{username,displayName:"常用昵称",password:"eight888",...extras});
+  req.headers.set("x-forwarded-for",`test-${username}`);return req;
+}
+test("public registration requires approval and cannot choose its own permissions",async()=>{
+  assert.equal((await register(registration("injected",{role:"admin",active:1,approval_status:"approved"}))).status,400);
+  const response=await register(registration("New-Applicant"));assert.equal(response.status,201);assert.equal(response.headers.get("set-cookie"),null);
+  const [person]=await query("SELECT * FROM account_users WHERE username='new-applicant'");
+  assert.equal(person.role,"member");assert.equal(person.active,0);assert.equal(person.approval_status,"pending");assert.notEqual(person.password_hash,"eight888");
+  await assert.rejects(login("new-applicant","eight888","applicant-ip"),/等待管理员批准/);
+  await assert.rejects(login("new-applicant","wrong","applicant-ip"),/用户名或密码/);
+  assert.equal((await register(registration("NEW-APPLICANT"))).status,409);
+  assert.equal((await changeUser(request("/api/admin/users",member,{id:person.id,approval:"approve"}))).status,403);
+  assert.equal((await changeUser(request("/api/admin/users",null,{id:person.id,approval:"approve"}))).status,401);
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,active:true}))).status,400);
+  // Even a stale/forged stored session cannot grant a pending applicant access.
+  const token="a".repeat(64);
+  await query("INSERT INTO account_sessions(token_hash,user_id,expires_at) VALUES($1,$2,$3)",[hashToken(token),person.id,new Date(Date.now()+60000).toISOString()]);
+  let invoked=false;const guarded=withAccount(async()=>{invoked=true;return Response.json({ok:true});});
+  assert.equal((await guarded(request("/api/generate",{token},{}))).status,401);assert.equal(invoked,false);
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,approval:"approve"}))).status,200);
+  assert.equal((await query("SELECT * FROM account_sessions WHERE user_id=$1",[person.id])).length,0);
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,approval:"approve"}))).status,409);
+  const approved=await login("new-applicant","eight888","applicant-ip");assert.equal(approved.user.role,"member");
+  assert.equal((await guarded(request("/api/generate",approved,{}))).status,200);assert(invoked);
+  const note="内部备注：设计二组 / 张三";
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,note}))).status,200);
+  const list=await (await users(request("/api/admin/users",admin))).json();assert.equal(list.users.find((u:any)=>u.id===person.id).admin_note,note);
+  assert(!JSON.stringify(await (await me(request("/api/auth/me",approved))).json()).includes(note));assert(!JSON.stringify(approved.user).includes("admin_note"));
+  assert.equal((await changeUser(request("/api/admin/users",approved,{id:person.id,note:"越权"}))).status,403);
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,note:"x".repeat(501)}))).status,400);
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,note:""}))).status,200);
+  assert.equal((await query("SELECT admin_note FROM account_users WHERE id=$1",[person.id]))[0].admin_note,"");
+});
+test("rejected registrations cannot log in or be enabled without approval",async()=>{
+  assert.equal((await register(registration("reject-test"))).status,201);
+  const [person]=await query("SELECT id FROM account_users WHERE username='reject-test'");
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,approval:"reject"}))).status,200);
+  await assert.rejects(login("reject-test","eight888","reject-ip"),/未通过/);
+  assert.equal((await changeUser(request("/api/admin/users",admin,{id:person.id,active:true}))).status,400);
+});
+test("registration validates size, origin, fields and persistent request limits",async()=>{
+  const cross=registration("cross-test");cross.headers.set("origin","https://evil.test");assert.equal((await register(cross)).status,403);
+  assert.equal((await register(registration("short-test",{password:"seven77"}))).status,400);
+  assert.equal((await register(registration("blank-test",{displayName:"   "}))).status,400);
+  assert.equal((await register(registration("large-test",{displayName:"x".repeat(5000)}))).status,413);
+  const bad=request("/api/auth/register",null,{});assert.equal((await register(bad)).status,400);
+  for(let i=0;i<10;i++){const result=await register(registration("rate-test"));assert.equal(result.status,i===0?201:409);}
+  assert.equal((await register(registration("rate-test"))).status,429);
+  assert.equal((await query("SELECT id FROM account_users WHERE username='rate-test'")).length,1);
+  const concurrent=await Promise.all([register(registration("race-test")),register(registration("RACE-TEST"))]);
+  assert.deepEqual(concurrent.map(r=>r.status).sort(),[201,409]);
+});
+test("additive migration preserves legacy accounts, disabled state and existing notes",async()=>{
+  const moduleName="node:sqlite";const {DatabaseSync}=await import(moduleName);const db=new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE account_users(id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL); INSERT INTO account_users VALUES('legacy','legacy','原账号','hash','member',0,'2026-11-01');");
+    const q=async(sql:string)=>db.prepare(sql).all();
+    await initializeAccountSchema(q,false);
+    let row=db.prepare("SELECT * FROM account_users WHERE id='legacy'").get();assert.equal(row.active,0);assert.equal(row.approval_status,"approved");assert.equal(row.password_hash,"hash");
+    db.exec("UPDATE account_users SET admin_note='已有备注'");await initializeAccountSchema(q,false);
+    row=db.prepare("SELECT * FROM account_users WHERE id='legacy'").get();assert.equal(row.admin_note,"已有备注");assert.equal(row.active,0);
+  } finally {db.close();}
 });

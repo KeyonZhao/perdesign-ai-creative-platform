@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS account_imports (
 );
 `;
 
+/** Additive migration: existing accounts stay approved; disabled accounts stay disabled. */
+export async function initializeAccountSchema(q: Query, postgres: boolean) {
+  for (const statement of accountSchema.split(";").map(v=>v.trim()).filter(Boolean)) await q(statement);
+  const columns = postgres
+    ? (await q("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='account_users'")).map(r=>r.column_name)
+    : (await q("PRAGMA table_info(account_users)")).map(r=>r.name);
+  if (!columns.includes("approval_status")) await q("ALTER TABLE account_users ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'approved'");
+  if (!columns.includes("admin_note")) await q("ALTER TABLE account_users ADD COLUMN admin_note TEXT NOT NULL DEFAULT ''");
+}
+
 async function connect(): Promise<Driver> {
   const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   let driver: Driver;
@@ -92,7 +102,7 @@ async function connect(): Promise<Driver> {
       })
     };
   }
-  for (const statement of accountSchema.split(";").map((v) => v.trim()).filter(Boolean)) await driver.query(statement);
+  await driver.transaction(q=>initializeAccountSchema(q,Boolean(url)));
   return driver;
 }
 

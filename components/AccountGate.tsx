@@ -18,6 +18,9 @@ export function AccountGate({children}:{children:ReactNode}) {
   const [busy,setBusy]=useState(false);
   const [username,setUsername]=useState("");
   const [password,setPassword]=useState("");
+  const [mode,setMode]=useState<"login"|"register">("login");
+  const [displayName,setDisplayName]=useState("");
+  const [notice,setNotice]=useState("");
   const previousAccount=useRef("");
   const userId=user?.id;
   function acceptUser(next:Account|null) {
@@ -57,12 +60,15 @@ export function AccountGate({children}:{children:ReactNode}) {
     return ()=>{active=false;window.clearInterval(timer);window.removeEventListener("focus",refresh);window.removeEventListener("pinwu-session-expired",expire);};
   },[]);
   async function submit(event:FormEvent) {
-    event.preventDefault();setBusy(true);setError("");
+    event.preventDefault();setBusy(true);setError("");setNotice("");
     try {
-      const response=await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,password})});
+      const registering=mode==="register";
+      const response=await fetch(registering?"/api/auth/register":"/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(registering?{username,displayName,password}:{username,password})});
       const body=await response.json(); if(!response.ok)throw new Error(body.error);
-      acceptUser(body.user);setPassword("");
-    } catch(error) {setError(error instanceof Error?error.message:"登录失败。");}
+      setPassword("");
+      if(registering){setMode("login");setDisplayName("");setNotice(body.message);}
+      else acceptUser(body.user);
+    } catch(error) {setError(error instanceof Error?error.message:"提交失败，请重试。");}
     finally {setBusy(false);}
   }
   async function logout() {
@@ -73,12 +79,15 @@ export function AccountGate({children}:{children:ReactNode}) {
   if(!ready) return <div className="account-login"><Loader2 className="animate-spin"/><span>正在检查登录状态</span></div>;
   if(user) return <AccountContext.Provider value={{user,logout}}><div key={user.id}>{children}</div></AccountContext.Provider>;
   return <main className="account-login"><form className="account-login-card" onSubmit={submit}>
-    <div className="account-login-icon"><LockKeyhole/></div><p className="account-eyebrow">PERDESIGN AI</p><h1>登录品物创意平台</h1><p className="account-muted">使用公司分配的账号，继续你的创意工作。</p>
-    <label>用户名<input autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} required maxLength={40} placeholder="输入用户名"/></label>
-    <label>密码<input type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} required maxLength={128} placeholder="输入密码"/></label>
+    <div className="account-login-icon"><LockKeyhole/></div><p className="account-eyebrow">PERDESIGN AI</p><h1>{mode==="register"?"注册品物创意平台":"登录品物创意平台"}</h1><p className="account-muted">{mode==="register"?"填写以下信息提交申请，管理员批准后即可使用。":"登录已有账号，或注册账号后等待管理员批准。"}</p>
+    {notice?<p role="status" className="admin-notice">{notice}</p>:null}
+    {mode==="register"?<label>姓名<input autoComplete="name" value={displayName} onChange={e=>setDisplayName(e.target.value)} required maxLength={60} placeholder="输入姓名或常用称呼"/></label>:null}
+    <label>用户名<input autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} required minLength={mode==="register"?3:undefined} maxLength={40} pattern={mode==="register"?"[a-zA-Z0-9_.\\-]{3,40}":undefined} placeholder={mode==="register"?"3–40 位字母、数字、点、下划线或短横线":"输入用户名"}/></label>
+    <label>密码<input type="password" autoComplete={mode==="register"?"new-password":"current-password"} value={password} onChange={e=>setPassword(e.target.value)} required minLength={mode==="register"?8:undefined} maxLength={128} placeholder={mode==="register"?"至少 8 位":"输入密码"}/></label>
     {error?<p role="alert" className="account-error">{error}</p>:null}
-    <button className="account-primary" disabled={busy}>{busy?<Loader2 className="animate-spin"/>:null}{busy?"正在登录":"登录"}</button>
-    <p className="account-footnote">账号由管理员创建。模型使用、调用记录及账单费用将记录到你的账号，供公司管理员查看。</p>
+    <button className="account-primary" disabled={busy}>{busy?<Loader2 className="animate-spin"/>:null}{busy?"正在提交":mode==="register"?"提交注册申请":"登录"}</button>
+    <button type="button" className="account-mode-switch" disabled={busy} onClick={()=>{setMode(mode==="login"?"register":"login");setPassword("");setError("");setNotice("");}}>{mode==="register"?"已有账号？返回登录":"还没有账号？申请注册"}</button>
+    <p className="account-footnote">注册申请需管理员批准。模型使用、调用记录及账单费用将记录到你的账号，供公司管理员查看。</p>
   </form></main>;
 }
 export function AccountPanel() {
