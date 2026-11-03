@@ -1,6 +1,6 @@
 import { accountStorageKey } from "./account-storage";
 
-/** Explicit administrator action only. Copies historical browser data; never removes originals. */
+/** Explicit signed-in user action only. Copies legacy browser data into the current account; never removes originals. */
 export async function copyLegacyHistory() {
   let added=0;
   for(const key of ["perdesign-research-history-v1","perdesign-mindmap-history-v1"]) {

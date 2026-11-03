@@ -85,11 +85,22 @@ export function AccountPanel() {
   const {user,logout}=useAccount();
   const [migration,setMigration]=useState("");const [copying,setCopying]=useState(false);
   async function migrate() {
-    if(!window.confirm("将此浏览器上线账号系统前的聊天、导图和画廊复制到当前管理员账号？原记录会保留，已有同编号记录不会被覆盖。"))return;
+    if(!window.confirm(`将此浏览器上线账号系统前的聊天、导图和画廊复制到当前账号「${user.displayName}（${user.username}）」？请确认这些旧记录属于你；共用电脑请勿导入他人的历史。原记录会保留，已有同编号记录不会被覆盖。`))return;
     setCopying(true);
     try{const count=await copyLegacyHistory();setMigration(`已复制 ${count} 条旧记录。刷新页面后查看，原记录仍保留。`);}
     catch(e){setMigration(e instanceof Error?e.message:"复制失败，原记录仍保留，可重试。");}
     finally{setCopying(false);}
   }
-  return <section className="section-surface"><div className="section-header"><div><h1 className="section-title">我的账号</h1><p className="section-subtitle">已登录，可使用平台功能</p></div></div><div className="account-panel"><ShieldCheck/><h2>{user.displayName}</h2><p className="account-muted">{user.username} · {user.role==="admin"?"管理员":"员工"}</p>{user.role==="admin"?<><a className="account-primary" href="/admin">打开管理后台</a><button className="account-secondary" disabled={copying} onClick={()=>void migrate()}>{copying?"正在复制旧历史":"导入此浏览器的旧历史"}</button><p className="account-muted">仅迁移账号系统上线前的数据，原记录不会删除。</p>{migration?<p role="status" className="account-muted">{migration}</p>:null}</>:null}<button className="account-secondary" onClick={()=>void logout()}><LogOut size={16}/>退出登录</button></div></section>;
+  return <section className="section-surface">
+    <div className="section-header"><div><h1 className="section-title">我的账号</h1><p className="section-subtitle">已登录，可使用平台功能</p></div></div>
+    <div className="account-panel">
+      <ShieldCheck/><h2>{user.displayName}</h2>
+      <p className="account-muted">{user.username} · {user.role==="admin"?"管理员":"员工"}</p>
+      {user.role==="admin"?<a className="account-primary" href="/admin">打开管理后台</a>:null}
+      <button className="account-secondary" disabled={copying} onClick={()=>void migrate()}>{copying?"正在复制旧历史":"导入此浏览器的旧历史"}</button>
+      <p className="account-muted">仅复制此浏览器、当前网址下账号系统上线前的旧历史到当前账号，原记录不会删除。共用电脑请确认旧记录属于你。</p>
+      {migration?<p role="status" className="account-muted">{migration}</p>:null}
+      <button className="account-secondary" onClick={()=>void logout()}><LogOut size={16}/>退出登录</button>
+    </div>
+  </section>;
 }
