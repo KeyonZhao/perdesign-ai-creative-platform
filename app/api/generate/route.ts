@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { submitAsyncImageEdit, submitAsyncImageGeneration } from "@/lib/aihubmix";
@@ -29,7 +30,8 @@ const requestSchema = z.object({
   quality: z.string().min(1)
 });
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const requestPayload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig({

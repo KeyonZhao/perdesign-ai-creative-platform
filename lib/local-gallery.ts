@@ -1,3 +1,4 @@
+import { accountStorageKey } from "@/lib/account-storage";
 import type { GenerationBatch, GenerationMetadata, GenerationResult, GenerationSourceImage } from "./types";
 import { dataUrlToBlob } from "./image";
 
@@ -213,7 +214,7 @@ async function restoreSourceImage(image?: StoredGenerationSourceImage): Promise<
 
 function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(accountStorageKey(DATABASE_NAME), DATABASE_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(BATCH_STORE)) {

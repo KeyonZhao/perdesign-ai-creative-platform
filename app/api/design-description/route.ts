@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { callChatCompletion } from "@/lib/aihubmix";
@@ -25,7 +26,8 @@ const requestSchema = z.object({
   imageBase64: z.string().startsWith("data:image/", "当前图片无法用于生成设计说明。")
 });
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig(payload, "chat");

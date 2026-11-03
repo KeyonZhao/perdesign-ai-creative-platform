@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveProviderConfig } from "@/lib/provider";
@@ -13,7 +14,8 @@ const requestSchema = z.object({
   changes: z.array(z.string().min(1)).min(1).max(100)
 });
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig(payload, "chat");

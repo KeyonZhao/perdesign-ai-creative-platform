@@ -1,4 +1,5 @@
 "use client";
+import { accountStorageKey } from "@/lib/account-storage";
 
 import { useEffect, useRef, useState } from "react";
 import { Bot, Download, FileText, Loader2, MessageSquare, Paperclip, Plus, SendHorizontal, Trash2, X } from "lucide-react";
@@ -824,7 +825,7 @@ async function saveFreeChatSessions(sessions: FreeChatSession[]) {
 
 function openFreeChatDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(FREE_CHAT_DB, 1);
+    const request = indexedDB.open(accountStorageKey(FREE_CHAT_DB), 1);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(FREE_CHAT_STORE)) {
         request.result.createObjectStore(FREE_CHAT_STORE, { keyPath: "id" });

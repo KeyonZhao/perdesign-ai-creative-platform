@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveProviderConfig } from "@/lib/provider";
@@ -28,7 +29,8 @@ const requestSchema = z.object({
     .pipe(z.array(messageSchema).min(1, "当前没有可用对话内容。"))
 });
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig(payload, "chat");

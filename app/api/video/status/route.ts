@@ -1,3 +1,5 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import {
   getVolcengineVideoConfig,
@@ -6,6 +8,7 @@ import {
 } from "@/lib/volcengine-video";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 type VideoTaskResponse = {
@@ -20,7 +23,8 @@ type VideoTaskResponse = {
   };
 };
 
-export async function GET(request: Request) {
+export const GET = withAccount(handleGET);
+async function handleGET(request: Request) {
   try {
     const taskId = new URL(request.url).searchParams.get("taskId")?.trim() || "";
     if (!taskId || !/^[A-Za-z0-9_-]+$/.test(taskId)) {
@@ -28,7 +32,7 @@ export async function GET(request: Request) {
     }
 
     const config = getVolcengineVideoConfig();
-    const response = await fetch(`${config.baseUrl}/v1/videos/${taskId}`, {
+    const response = await auditedFetch(`${config.baseUrl}/v1/videos/${taskId}`, {
       method: "GET",
       headers: volcengineVideoHeaders(config.apiKey),
       cache: "no-store"

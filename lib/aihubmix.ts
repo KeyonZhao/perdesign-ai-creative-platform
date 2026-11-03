@@ -1,3 +1,4 @@
+import { auditedFetch } from "@/lib/call-audit";
 import { appendFile, mkdir } from "fs/promises";
 import { z } from "zod";
 import { imageModels } from "./models";
@@ -45,7 +46,7 @@ export async function callChatCompletion(params: {
   temperature?: number;
   maxCompletionTokens?: number;
 }) {
-  const response = await fetch(`${resolveBaseUrl(params.baseUrl)}/chat/completions`, {
+  const response = await auditedFetch(`${resolveBaseUrl(params.baseUrl)}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${params.apiKey}`,
@@ -88,7 +89,7 @@ export async function streamChatCompletion(
   },
   onDelta: (delta: string) => void
 ) {
-  const response = await fetch(`${resolveBaseUrl(params.baseUrl)}/chat/completions`, {
+  const response = await auditedFetch(`${resolveBaseUrl(params.baseUrl)}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${params.apiKey}`,
@@ -572,7 +573,7 @@ export async function submitAsyncImageEdit(params: {
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await auditedFetch(endpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${params.apiKey}`,
@@ -663,7 +664,7 @@ export async function submitAsyncImageGeneration(params: {
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await auditedFetch(endpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${params.apiKey}`,
@@ -739,7 +740,7 @@ export async function getAsyncImageJob(params: {
   try {
     response = await fetchWithRetry(
       () =>
-        fetch(endpoint, {
+        auditedFetch(endpoint, {
           method: "GET",
           headers: { Authorization: `Bearer ${params.apiKey}` },
           cache: "no-store"
@@ -1177,8 +1178,8 @@ export async function normalizeImageResultToDataUrl(json: unknown, apiKey?: stri
   const imageUrl = item.url;
 
   const attempts = [
-    () => fetch(imageUrl),
-    () => fetch(imageUrl, { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined })
+    () => auditedFetch(imageUrl),
+    () => auditedFetch(imageUrl, { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined })
   ];
 
   let lastError: unknown = null;
@@ -1375,7 +1376,7 @@ async function submitApiMartImageGeneration(params: {
     promptPreview: clipText(params.prompt, 500)
   });
 
-  const response = await fetch(endpoint, {
+  const response = await auditedFetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${params.apiKey}`,

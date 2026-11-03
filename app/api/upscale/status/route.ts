@@ -1,7 +1,10 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const requestSchema = z.object({ taskId: z.string().regex(/^[A-Za-z0-9_-]{6,200}$/) });
@@ -24,13 +27,14 @@ function readError(payload: Record<string, unknown> | null, fallback: string) {
   return fallback;
 }
 
-export async function GET(request: Request) {
+export const GET = withAccount(handleGET);
+async function handleGET(request: Request) {
   try {
     const { taskId } = requestSchema.parse({
       taskId: new URL(request.url).searchParams.get("taskId") || ""
     });
     const { apiKey, baseUrl } = getConfig();
-    const response = await fetch(`${baseUrl}/tasks/${encodeURIComponent(taskId)}`, {
+    const response = await auditedFetch(`${baseUrl}/tasks/${encodeURIComponent(taskId)}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       cache: "no-store"
     });
@@ -45,7 +49,7 @@ export async function GET(request: Request) {
     const urls = Array.isArray(payload?.result_urls) ? payload.result_urls : [];
     const resultUrl = urls.find((value): value is string => typeof value === "string" && /^https?:\/\//.test(value));
     if (!resultUrl) throw new Error("高清放大任务已完成，但没有返回图片地址。");
-    const imageResponse = await fetch(resultUrl, { cache: "no-store" });
+    const imageResponse = await auditedFetch(resultUrl, { cache: "no-store" });
     if (!imageResponse.ok) throw new Error("高清图片下载失败，请重新尝试。");
     const mimeType = imageResponse.headers.get("content-type")?.split(";")[0] || "image/png";
     const imageBase64 = `data:${mimeType};base64,${Buffer.from(await imageResponse.arrayBuffer()).toString("base64")}`;

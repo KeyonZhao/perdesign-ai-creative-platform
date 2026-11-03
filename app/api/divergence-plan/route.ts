@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { streamChatCompletion } from "@/lib/aihubmix";
@@ -153,7 +154,8 @@ function buildFallbackExploration(payload: z.infer<typeof requestSchema>) {
   return { prompt: prepared.prompt, concepts: prepared.quadrantStyleLabels };
 }
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig(payload, "chat");

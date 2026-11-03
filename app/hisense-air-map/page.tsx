@@ -1,4 +1,5 @@
 "use client";
+import { scopedStorage } from "@/lib/account-storage";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Download, FileUp, Focus, Minus, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
@@ -354,8 +355,8 @@ export default function HisenseAirMap() {
   const fileRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef({ pointerId: -1, startX: 0, startY: 0, originX: 0, originY: 0 });
 
-  useEffect(() => { try { const saved = localStorage.getItem(STORAGE_KEY); if (saved) setTree(JSON.parse(saved)); } catch {} }, []);
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(tree)); }, [tree]);
+  useEffect(() => { try { const saved = scopedStorage.getItem(STORAGE_KEY); if (saved) setTree(JSON.parse(saved)); } catch {} }, []);
+  useEffect(() => { scopedStorage.setItem(STORAGE_KEY, JSON.stringify(tree)); }, [tree]);
 
   const selected = useMemo(() => { let found = tree; walk(tree, (node) => { if (node.id === selectedId) found = node; }); return found; }, [tree, selectedId]);
   const matches = useMemo(() => { const ids = new Set<string>(); const term = query.trim().toLowerCase(); if (!term) return ids; walk(tree, (node, parent) => { if (`${node.title} ${node.detail || ""}`.toLowerCase().includes(term)) { ids.add(node.id); if (parent) ids.add(parent.id); } }); return ids; }, [tree, query]);
@@ -419,7 +420,7 @@ export default function HisenseAirMap() {
         <label>节点标签<input value={selected.tag || ""} placeholder="如：机会判断" onChange={(e) => setTree((old) => updateNode(old, selectedId, { tag: e.target.value }))}/></label>
         <div className={styles.actions}><button className={styles.primary} onClick={addChild}><Plus size={16}/> 添加子观点</button><button disabled={selectedId === "root"} onClick={() => { setTree((old) => removeNode(old, selectedId)); setSelectedId("root"); }}><Trash2 size={16}/> 删除</button></div>
         <div className={styles.note}><strong>逻辑提示</strong><p>每个子节点应回答父节点的“为什么、是什么、怎么做或如何验证”，从而保持可归纳关系。</p></div>
-        <div className={styles.stats}><span>{countNodes(tree)} 个观点</span><button onClick={() => { if (confirm("恢复初始导图？你的编辑将被覆盖。")) { setTree(clone(initialMap)); setSelectedId("root"); localStorage.removeItem(STORAGE_KEY); } }}><RotateCcw size={14}/> 恢复原版</button></div>
+        <div className={styles.stats}><span>{countNodes(tree)} 个观点</span><button onClick={() => { if (confirm("恢复初始导图？你的编辑将被覆盖。")) { setTree(clone(initialMap)); setSelectedId("root"); scopedStorage.removeItem(STORAGE_KEY); } }}><RotateCcw size={14}/> 恢复原版</button></div>
       </aside>
     </div>
   </main>;

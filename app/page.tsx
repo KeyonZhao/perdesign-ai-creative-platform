@@ -1,4 +1,6 @@
 "use client";
+import { AccountPanel, useAccount } from "@/components/AccountGate";
+import { scopedStorage } from "@/lib/account-storage";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -69,7 +71,6 @@ import { makeId } from "@/lib/utils";
 
 const storageKeys = {
   activeSection: "product-workstation-active-section",
-  authCode: "product-workstation-auth-code",
   imageApiKey: "product-workstation-image-api-key",
   imageApiBaseUrl: "product-workstation-image-api-base-url",
   chatApiKey: "product-workstation-chat-api-key",
@@ -84,7 +85,6 @@ const storageKeys = {
 };
 
 const BRAIN_MODEL = "gpt-5.6-sol";
-const AUTH_CODE = "perdesignsg";
 const DEFAULT_IMAGE_API_BASE_URL = "https://task-api-1.65535.space/apimart/v1";
 const DEFAULT_CHAT_API_BASE_URL = "https://api2.65535.space/v1";
 const SCENE_GENERATION_PROMPT = "分析图片中的产品品类，生成该品类经常出现在的场景下的产品场景图";
@@ -171,8 +171,8 @@ declare global {
 }
 
 export default function Home() {
+  const { user } = useAccount();
   const [activeSection, setActiveSection] = usePersistedState(storageKeys.activeSection, "design");
-  const [authCode, setAuthCode] = usePersistedState(storageKeys.authCode, "");
   const [imageApiKey, setImageApiKey] = usePersistedState(storageKeys.imageApiKey, "");
   const [imageApiBaseUrl, setImageApiBaseUrl] = usePersistedState(
     storageKeys.imageApiBaseUrl,
@@ -197,10 +197,6 @@ export default function Home() {
   const [referenceImages, setReferenceImages] = useState<UploadedImage[]>([]);
   const [innovationLevel, setInnovationLevel] = usePersistedNumber(storageKeys.innovationLevel, 50);
   const [promptBeforeOptimization, setPromptBeforeOptimization] = useState<string | null>(null);
-  const [authDraft, setAuthDraft] = useState("");
-  const [authModalValue, setAuthModalValue] = useState("");
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction>(null);
   const [status, setStatus] = useState<GenerationStatus>("idle");
   const [generationBatches, setGenerationBatches] = useState<GenerationBatch[]>([]);
   const generationBatchesRef = useRef<GenerationBatch[]>([]);
@@ -231,7 +227,7 @@ export default function Home() {
   const [mindMapGenerationError, setMindMapGenerationError] = useState("");
   const [mindMapSessions, setMindMapSessions] = useState<MindMapSession[]>([]);
   const [activeMindMapSessionId, setActiveMindMapSessionId] = useState("");
-  const isAuthorized = normalizeAuthCode(authCode) === AUTH_CODE;
+  const isAuthorized = Boolean(user);
   const hasChatConfig = isAuthorized;
   const canGenerate = Boolean(
     productName.trim() ||
@@ -246,14 +242,10 @@ export default function Home() {
     }
   }, [imageModel, setImageModel]);
 
-  useEffect(() => {
-    setAuthDraft(authCode);
-    setAuthModalValue(authCode);
-  }, [authCode]);
 
   useEffect(() => {
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(MIND_MAP_HISTORY_STORAGE_KEY) || "[]") as MindMapSession[];
+      const parsed = JSON.parse(scopedStorage.getItem(MIND_MAP_HISTORY_STORAGE_KEY) || "[]") as MindMapSession[];
       if (Array.isArray(parsed) && parsed.length) {
         const sorted = [...parsed].sort((a, b) => b.updatedAt - a.updatedAt);
         setMindMapSessions(sorted);
@@ -302,7 +294,7 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      const parsed = JSON.parse(localStorage.getItem(RESEARCH_HISTORY_STORAGE_KEY) || "[]") as ResearchSession[];
+      const parsed = JSON.parse(scopedStorage.getItem(RESEARCH_HISTORY_STORAGE_KEY) || "[]") as ResearchSession[];
       const valid = parsed
         .filter((session) =>
           session?.id &&
@@ -311,7 +303,7 @@ export default function Home() {
         )
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 40);
-      localStorage.setItem(RESEARCH_HISTORY_STORAGE_KEY, JSON.stringify(valid));
+      scopedStorage.setItem(RESEARCH_HISTORY_STORAGE_KEY, JSON.stringify(valid));
       if (valid.length) {
         setResearchSessions(valid);
         setActiveResearchSessionId(valid[0].id);
@@ -358,7 +350,7 @@ export default function Home() {
         : [nextSession, ...current].slice(0, 40);
       const sortedNext = sortResearchSessionsByUpdatedAt(next);
       try {
-        localStorage.setItem(RESEARCH_HISTORY_STORAGE_KEY, JSON.stringify(sortedNext));
+        scopedStorage.setItem(RESEARCH_HISTORY_STORAGE_KEY, JSON.stringify(sortedNext));
       } catch {
         // Keep the in-memory history available if browser storage is full or unavailable.
       }
@@ -810,106 +802,15 @@ export default function Home() {
     };
   }
 
-  function openAuthModal(action: PendingAuthAction = null) {
-    setPendingAuthAction(action);
-    setAuthModalValue(authDraft || authCode);
-    setIsAuthModalOpen(true);
+  function openAuthModal(_action: PendingAuthAction = null) {
+    window.dispatchEvent(new Event("pinwu-session-expired"));
   }
-
-  function ensureAuthorized(action: PendingAuthAction = null) {
-    if (isAuthorized) return true;
-    openAuthModal(action);
-    return false;
-  }
-
-  function runPendingAction(action: PendingAuthAction, forceAuthorized = false) {
-    if (!action) return;
-    switch (action.type) {
-      case "generate":
-        void generateCore(forceAuthorized);
-        break;
-      case "research":
-        void sendResearchMessageCore(forceAuthorized);
-        break;
-      case "multi-view":
-        void generateMultiViewCore(action.result, forceAuthorized);
-        break;
-      case "scene":
-        void generateSceneCore(action.result, forceAuthorized);
-        break;
-      case "ecommerce-poster":
-        void generateEcommercePosterCore(action.result, action.productName, action.instruction, forceAuthorized);
-        break;
-      case "divergence":
-        void generateDivergenceCore(action.result, action.productName, action.request, forceAuthorized);
-        break;
-      case "image-prompt":
-        void generateFromImagePromptCore(action.result, action.instruction, action.referenceImages, forceAuthorized);
-        break;
-      case "video":
-        void generateVideoCore(action.result, action.request, forceAuthorized);
-        break;
-      case "local-edit":
-        void generateLocalEditCore(action.result, action.maskImageBase64, action.instruction, action.guideImageBase64, forceAuthorized);
-        break;
-      case "custom-generate":
-        void generateCustomCanvasCore(action.request, forceAuthorized);
-        break;
-      default:
-        break;
-    }
-  }
-
-  function completeAuthorization(rawValue: string, shouldRunPendingAction = false) {
-    const normalized = normalizeAuthCode(rawValue);
-    if (normalized !== AUTH_CODE) {
-      pushToast("error", "认证码不正确，请重新输入。");
-      return false;
-    }
-
-    setAuthCode(AUTH_CODE);
-    setAuthDraft(AUTH_CODE);
-    setAuthModalValue(AUTH_CODE);
-    setImageApiBaseUrl(DEFAULT_IMAGE_API_BASE_URL);
-    setChatApiBaseUrl(DEFAULT_CHAT_API_BASE_URL);
-    setImageApiKey(PRESET_IMAGE_API_KEY);
-    setChatApiKey(PRESET_CHAT_API_KEY);
-    pushToast("success", "认证通过，平台功能已解锁。");
-
-    const nextAction = pendingAuthAction;
-    setPendingAuthAction(null);
-    setIsAuthModalOpen(false);
-    if (shouldRunPendingAction && nextAction) {
-      window.setTimeout(() => runPendingAction(nextAction, true), 0);
-    }
-    return true;
-  }
-
-  function saveAuthConfig() {
-    const nextValue = authDraft.trim();
-    const normalized = normalizeAuthCode(nextValue);
-
-    setAuthCode(nextValue);
-    setPendingAuthAction(null);
-
-    if (normalized !== AUTH_CODE) {
-      setImageApiKey("");
-      setChatApiKey("");
-      pushToast("error", "认证码不正确，当前已切换为未认证状态。");
-      return;
-    }
-
-    completeAuthorization(nextValue, false);
-  }
-
-  function submitAuthModal() {
-    completeAuthorization(authModalValue, true);
-  }
+  function ensureAuthorized(_action: PendingAuthAction = null) { return isAuthorized; }
 
   async function optimizePrompt() {
     const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
     if (!unlocked) return openAuthModal();
-    if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImages.length) {
       return pushToast("error", "请填写文字描述，或上传可用于撰写提示词的图片。");
     }
@@ -954,7 +855,7 @@ export default function Home() {
       throw new Error("请先完成认证，再使用 AI 撰写提示词。");
     }
     if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) {
-      throw new Error("当前认证信息不可用，请重新输入认证码。");
+      throw new Error("请重新登录或联系管理员检查服务配置。");
     }
 
     const [productImageForOptimization, referenceImageForOptimization] = await Promise.all([
@@ -1000,7 +901,7 @@ export default function Home() {
     if (!isLocalHistoryReady) return pushToast("info", "正在恢复本地作品，请稍候再生成。");
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
-    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     if (!productName.trim() && !requirement.trim() && !uploadedImage && !referenceImages.length) {
       return pushToast("error", "请填写文字描述，或上传可用于生成的图片。");
     }
@@ -1030,7 +931,7 @@ export default function Home() {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
-      pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+      pushToast("error", "请重新登录或联系管理员检查服务配置。");
       return;
     }
     if (!request.sourceImage.dataUrl) {
@@ -1282,7 +1183,7 @@ export default function Home() {
   async function generateMultiViewCore(result: GenerationResult, forceAuthorized = false) {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
-    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于多视图生成。");
 
     await runGeneration({
@@ -1305,7 +1206,7 @@ export default function Home() {
   async function generateSceneCore(result: GenerationResult, forceAuthorized = false) {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
-    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于场景图生成。");
 
     await runGeneration({
@@ -1343,7 +1244,7 @@ export default function Home() {
       getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
-      return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+      return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     }
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于电商海报生成。");
 
@@ -1399,7 +1300,7 @@ export default function Home() {
     } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
-      return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+      return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     }
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于创意发散。");
 
@@ -1508,7 +1409,7 @@ export default function Home() {
       getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
     if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) {
-      return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+      return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     }
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于继续生成。");
 
@@ -1686,7 +1587,7 @@ export default function Home() {
   ) {
     const { imageApiKey: resolvedImageApiKey, imageApiBaseUrl: resolvedImageApiBaseUrl, unlocked } = getResolvedConfig(forceAuthorized);
     if (!unlocked) return;
-    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+    if (!resolvedImageApiKey || !resolvedImageApiBaseUrl) return pushToast("error", "请重新登录或联系管理员检查服务配置。");
     if (!result.imageBase64) return pushToast("error", "当前图片不可用于局部修改。");
     if (!maskImageBase64 || !instruction.trim()) return pushToast("error", "请先涂抹需要修改的区域，并输入修改要求。");
 
@@ -1728,7 +1629,7 @@ export default function Home() {
   async function generateDesignDescriptionCore(result: GenerationResult) {
     const { chatApiKey: resolvedChatApiKey, chatApiBaseUrl: resolvedChatApiBaseUrl, unlocked } = getResolvedConfig();
     if (!unlocked || !resolvedChatApiKey || !resolvedChatApiBaseUrl) {
-      throw new Error("当前认证信息不可用，请重新输入认证码。");
+      throw new Error("请重新登录或联系管理员检查服务配置。");
     }
     if (!result.imageBase64) throw new Error("当前图片无法用于生成设计说明。");
 
@@ -1789,7 +1690,7 @@ export default function Home() {
       return;
     }
     if (!resolvedChatApiKey || !resolvedChatApiBaseUrl) {
-      pushToast("error", "当前认证信息不可用，请重新输入认证码。");
+      pushToast("error", "请重新登录或联系管理员检查服务配置。");
       return;
     }
     if (researchFiles.some((file) => file.status === "reading")) {
@@ -1958,7 +1859,7 @@ export default function Home() {
       unlocked
     } = getResolvedConfig(false);
     if (!unlocked || !resolvedChatApiKey || !resolvedChatApiBaseUrl) {
-      throw new Error("当前认证信息不可用，请重新输入认证码。");
+      throw new Error("请重新登录或联系管理员检查服务配置。");
     }
 
     try {
@@ -1995,7 +1896,7 @@ export default function Home() {
       unlocked
     } = getResolvedConfig(false);
     if (!unlocked || !resolvedChatApiKey || !resolvedChatApiBaseUrl) {
-      const message = "当前认证信息不可用，请重新输入认证码。";
+      const message = "请重新登录或联系管理员检查服务配置。";
       pushToast("error", message);
       throw new Error(message);
     }
@@ -2586,27 +2487,12 @@ export default function Home() {
             ) : null}
 
             {activeSection === "api" ? (
-              <ApiSection
-                authCode={authDraft}
-                setAuthCode={setAuthDraft}
-                isAuthorized={isAuthorized}
-                onSave={saveAuthConfig}
-              />
+              <AccountPanel />
             ) : null}
           </div>
         </div>
         <span className="app-version" aria-label="当前版本 v1.0.8">v1.0.8</span>
       </main>
-      <AuthCodeModal
-        open={isAuthModalOpen}
-        value={authModalValue}
-        setValue={setAuthModalValue}
-        onClose={() => {
-          setIsAuthModalOpen(false);
-          setPendingAuthAction(null);
-        }}
-        onSubmit={submitAuthModal}
-      />
       <Toast toasts={toasts} />
     </>
   );
@@ -2681,7 +2567,7 @@ function WorkspaceNav({
           onClick={() => onChange("api")}
         >
           <PlugZap className="h-4 w-4" />
-          <span>认证码</span>
+          <span>我的账号</span>
         </button>
       </div>
     </aside>
@@ -3539,7 +3425,7 @@ function hasMeaningfulResearchSessionContent(messages: ResearchMessage[]) {
 
 function persistResearchSessions(sessions: ResearchSession[]) {
   try {
-    localStorage.setItem(
+    scopedStorage.setItem(
       RESEARCH_HISTORY_STORAGE_KEY,
       JSON.stringify(sortResearchSessionsByUpdatedAt(sessions).slice(0, 40))
     );
@@ -3567,7 +3453,7 @@ function createBlankMindMapSession(): MindMapSession {
 
 function persistMindMapSessions(sessions: MindMapSession[]) {
   try {
-    localStorage.setItem(
+    scopedStorage.setItem(
       MIND_MAP_HISTORY_STORAGE_KEY,
       JSON.stringify([...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60))
     );
@@ -3694,103 +3580,6 @@ function sanitizeImportedResearchImages(value: unknown): ResearchWebImage[] | un
   }).slice(0, 8);
 }
 
-function ApiSection(props: {
-  authCode: string;
-  setAuthCode: (value: string) => void;
-  isAuthorized: boolean;
-  onSave: () => void;
-}) {
-  return (
-    <section className="section-surface">
-      <div className="section-header">
-        <div>
-          <h1 className="section-title">认证码</h1>
-          <p className="section-subtitle">输入认证码后，平台会自动接入对话与生图服务，无需再手动填写 API Key。</p>
-        </div>
-      </div>
-
-      <div className="api-grid">
-        <div className="content-card-soft col-span-full max-w-[720px] p-6">
-          <div className="space-y-5">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-200">
-              <span
-                className={`inline-block h-2.5 w-2.5 rounded-full ${props.isAuthorized ? "bg-emerald-400 shadow-[0_0_12px_rgba(74,222,128,0.9)]" : "bg-zinc-500"}`}
-              />
-              {props.isAuthorized ? "已认证，可直接使用全部功能" : "未认证，生成与对话功能将被锁定"}
-            </div>
-
-            <label className="block">
-              <input
-                className="field h-11 px-3 text-sm"
-                value={props.authCode}
-                onChange={(event) => props.setAuthCode(event.target.value)}
-                placeholder="请输入认证码"
-              />
-            </label>
-
-            <div className="api-inline-actions px-4 py-4">
-              <button type="button" className="btn-primary api-save-button" onClick={props.onSave}>
-                保存并认证
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function AuthCodeModal({
-  open,
-  value,
-  setValue,
-  onClose,
-  onSubmit
-}: {
-  open: boolean;
-  value: string;
-  setValue: (value: string) => void;
-  onClose: () => void;
-  onSubmit: () => void;
-}) {
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5 backdrop-blur-sm">
-      <div className="w-full max-w-[460px] rounded-[24px] border border-white/10 bg-[#18181b] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
-        <div className="space-y-2">
-          <h2 className="text-[28px] font-semibold text-white">输入认证码</h2>
-          <p className="text-sm leading-6 text-zinc-400">认证通过后即可直接使用生成与对话功能。</p>
-        </div>
-
-        <div className="mt-5 space-y-4">
-          <input
-            autoFocus
-            className="field h-12 px-4 text-sm"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              onSubmit();
-            }}
-            placeholder="请输入认证码"
-          />
-
-          <div className="flex flex-wrap justify-end gap-3">
-            <button type="button" className="btn-secondary h-11 rounded-[14px] px-4 text-sm font-medium" onClick={onClose}>
-              取消
-            </button>
-            <button type="button" className="btn-primary h-11 rounded-[14px] px-5 text-sm font-semibold" onClick={onSubmit}>
-              确认使用
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 class TerminalImageJobError extends Error {
   constructor(message: string) {
     super(message);
@@ -3911,14 +3700,14 @@ function usePersistedState(key: string, defaultValue: string) {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem(key);
+    const stored = scopedStorage.getItem(key);
     if (stored !== null) setValue(stored);
     setHydrated(true);
   }, [key]);
 
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(key, value);
+    scopedStorage.setItem(key, value);
   }, [hydrated, key, value]);
 
   return [value, setValue] as const;
@@ -3929,14 +3718,14 @@ function usePersistedNumber(key: string, defaultValue: number) {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem(key);
+    const stored = scopedStorage.getItem(key);
     if (stored !== null) setValue(Number(stored));
     setHydrated(true);
   }, [key]);
 
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(key, String(value));
+    scopedStorage.setItem(key, String(value));
   }, [hydrated, key, value]);
 
   return [value, setValue] as const;
@@ -3955,9 +3744,6 @@ function getImageSizeOption(dataUrl: string, fallback: string) {
   });
 }
 
-function normalizeAuthCode(value: string) {
-  return value.trim().toLowerCase();
-}
 
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {

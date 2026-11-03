@@ -1,3 +1,5 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import {
@@ -17,7 +19,8 @@ type CreateVideoResponse = {
   id?: string;
 };
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const body = await request.json() as {
       imageUrl?: unknown;
@@ -56,7 +59,7 @@ export async function POST(request: Request) {
         ? body.resolution
         : "720p";
     const config = getVolcengineVideoConfig();
-    const response = await fetch(`${config.baseUrl}/v1/videos`, {
+    const response = await auditedFetch(`${config.baseUrl}/v1/videos`, {
       method: "POST",
       headers: volcengineVideoHeaders(config.apiKey, `perdesign-video-${crypto.randomUUID()}`),
       body: JSON.stringify({

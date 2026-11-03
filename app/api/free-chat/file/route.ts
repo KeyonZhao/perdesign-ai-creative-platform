@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import JSZip from "jszip";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
@@ -8,7 +9,8 @@ export const maxDuration = 120;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 220_000;
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const form = await request.formData();
     const file = form.get("file");

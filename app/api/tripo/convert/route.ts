@@ -1,3 +1,5 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import {
   getTripoApiKey,
@@ -11,7 +13,8 @@ export const maxDuration = 60;
 
 type ConvertTaskResult = { task_id: string };
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const body = await request.json() as { taskId?: unknown; format?: unknown };
     const taskId = typeof body.taskId === "string" ? body.taskId.trim() : "";
@@ -25,7 +28,7 @@ export async function POST(request: Request) {
     }
 
     const apiKey = getTripoApiKey();
-    const response = await fetch(tripoUrl("/models/convert"), {
+    const response = await auditedFetch(tripoUrl("/models/convert"), {
       method: "POST",
       headers: tripoHeaders(apiKey, true),
       body: JSON.stringify({ input: taskId, format }),

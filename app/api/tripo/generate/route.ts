@@ -1,3 +1,5 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import {
   getTripoApiKey,
@@ -24,7 +26,7 @@ async function uploadImage(apiKey: string, imageBase64: string, filename: string
     `${filename}.${image.extension}`
   );
 
-  const uploadResponse = await fetch(tripoUrl("/files"), {
+  const uploadResponse = await auditedFetch(tripoUrl("/files"), {
     method: "POST",
     headers: tripoHeaders(apiKey),
     body: uploadForm,
@@ -33,7 +35,8 @@ async function uploadImage(apiKey: string, imageBase64: string, filename: string
   return readTripoResponse<UploadResult>(uploadResponse);
 }
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const body = await request.json() as {
       imageBase64?: unknown;
@@ -80,7 +83,7 @@ export async function POST(request: Request) {
       };
     }
 
-    const createResponse = await fetch(tripoUrl(endpoint), {
+    const createResponse = await auditedFetch(tripoUrl(endpoint), {
       method: "POST",
       headers: tripoHeaders(apiKey, true),
       body: JSON.stringify(taskPayload),

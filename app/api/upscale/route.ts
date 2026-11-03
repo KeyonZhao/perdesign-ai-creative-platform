@@ -1,3 +1,5 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -30,11 +32,12 @@ function readError(payload: unknown, fallback: string) {
   return fallback;
 }
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const input = requestSchema.parse(await request.json());
     const { apiKey, baseUrl } = getConfig();
-    const response = await fetch(`${baseUrl}/tasks`, {
+    const response = await auditedFetch(`${baseUrl}/tasks`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,

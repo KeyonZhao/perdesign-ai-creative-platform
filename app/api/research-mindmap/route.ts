@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -21,7 +22,8 @@ let mindMapRequestQueue: Promise<void> = Promise.resolve();
 const MIND_MAP_ANALYSIS_VERSION = "argument-v2";
 const mindMapResultCache = new Map<string, { tree: MindMapNode; nodeCount: number; quality: ReturnType<typeof validateStrategicMap>; analysisMode: "ai"; analysisVersion: string }>();
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   const queuedRequest = mindMapRequestQueue.then(() => handleMindMapRequest(request));
   mindMapRequestQueue = queuedRequest.then(() => undefined, () => undefined);
   return queuedRequest;

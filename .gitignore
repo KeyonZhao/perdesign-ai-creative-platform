@@ -19,3 +19,4 @@ github-upload-batches
 .env.test.local
 .env.production.local
 .vercel
+.local-data/

@@ -1,10 +1,14 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { isAllowedTripoModelUrl } from "@/lib/tripo";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(request: Request) {
+export const GET = withAccount(handleGET);
+async function handleGET(request: Request) {
   const searchParams = new URL(request.url).searchParams;
   const modelUrl = searchParams.get("url")?.trim();
   const requestedFilename = searchParams.get("filename")?.trim();
@@ -16,7 +20,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const upstream = await fetch(modelUrl, { cache: "no-store" });
+    const upstream = await auditedFetch(modelUrl, { cache: "no-store" });
     if (!upstream.ok || !upstream.body) {
       return NextResponse.json(
         { error: `3D 模型读取失败（HTTP ${upstream.status}）。` },

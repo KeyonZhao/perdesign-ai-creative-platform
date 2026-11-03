@@ -1,3 +1,4 @@
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { optimizeUserPrompt } from "@/lib/aihubmix";
@@ -30,7 +31,8 @@ const requestSchema = z.object({
   { message: "请填写文字描述，或上传可用于撰写提示词的图片。" }
 );
 
-export async function POST(request: Request) {
+export const POST = withAccount(handlePOST);
+async function handlePOST(request: Request) {
   try {
     const payload = requestSchema.parse(await request.json());
     const provider = resolveProviderConfig(payload, "chat");

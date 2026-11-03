@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import "./globals.css";
+import "./accounts.css";
+import { AccountGate } from "@/components/AccountGate";
 
 export const metadata: Metadata = {
   title: "品物AI设计工作站",
@@ -11,7 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN">
       <body>
-        {children}
+        <AccountGate>{children}</AccountGate>
         <Script
           type="module"
           src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.2.0/dist/model-viewer.min.js"

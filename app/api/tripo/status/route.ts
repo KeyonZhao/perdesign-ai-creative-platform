@@ -1,3 +1,5 @@
+import { auditedFetch } from "@/lib/call-audit";
+import { withAccount } from "@/lib/call-audit";
 import { NextResponse } from "next/server";
 import {
   getTripoApiKey,
@@ -9,8 +11,10 @@ import {
 } from "@/lib/tripo";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export async function GET(request: Request) {
+export const GET = withAccount(handleGET);
+async function handleGET(request: Request) {
   try {
     const taskId = new URL(request.url).searchParams.get("taskId")?.trim();
     if (!taskId || !/^[A-Za-z0-9_-]{1,200}$/.test(taskId)) {
@@ -18,7 +22,7 @@ export async function GET(request: Request) {
     }
 
     const apiKey = getTripoApiKey();
-    const response = await fetch(tripoUrl(`/tasks/${encodeURIComponent(taskId)}`), {
+    const response = await auditedFetch(tripoUrl(`/tasks/${encodeURIComponent(taskId)}`), {
       headers: tripoHeaders(apiKey),
       cache: "no-store"
     });
