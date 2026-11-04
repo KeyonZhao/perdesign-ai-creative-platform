@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS account_media (
 );
 CREATE TABLE IF NOT EXISTS account_bills (
  request_id TEXT PRIMARY KEY, call_id TEXT UNIQUE REFERENCES account_calls(id), model TEXT NOT NULL,
- user_agent TEXT NOT NULL, billed_at TEXT NOT NULL, cost_nano BIGINT NOT NULL,
+ user_agent TEXT NOT NULL, billed_at TEXT NOT NULL, cost_nano BIGINT,
  status TEXT NOT NULL, imported_at TEXT NOT NULL, import_id TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS account_imports (
@@ -52,6 +52,21 @@ export async function initializeAccountSchema(q: Query, postgres: boolean) {
     : (await q("PRAGMA table_info(account_users)")).map(r=>r.name);
   if (!columns.includes("approval_status")) await q("ALTER TABLE account_users ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'approved'");
   if (!columns.includes("admin_note")) await q("ALTER TABLE account_users ADD COLUMN admin_note TEXT NOT NULL DEFAULT ''");
+  // NULL means the supplier did not provide a fee, not a zero-cost call.
+  if (postgres) {
+    const [cost] = await q("SELECT is_nullable FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='account_bills' AND column_name='cost_nano'");
+    if (cost?.is_nullable === "NO") await q("ALTER TABLE account_bills ALTER COLUMN cost_nano DROP NOT NULL");
+  } else {
+    const cost = (await q("PRAGMA table_info(account_bills)")).find(r=>r.name==="cost_nano");
+    if (cost?.notnull) {
+      // SQLite has no DROP NOT NULL. This runs within the initialization transaction.
+      const definition = accountSchema.split(";").find(s=>s.includes("CREATE TABLE IF NOT EXISTS account_bills"))!;
+      await q(definition.replace("IF NOT EXISTS account_bills", "account_bills_nullable"));
+      await q("INSERT INTO account_bills_nullable SELECT request_id,call_id,model,user_agent,billed_at,cost_nano,status,imported_at,import_id FROM account_bills");
+      await q("DROP TABLE account_bills");
+      await q("ALTER TABLE account_bills_nullable RENAME TO account_bills");
+    }
+  }
 }
 
 async function connect(): Promise<Driver> {

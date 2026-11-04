@@ -135,11 +135,74 @@ test("stale tabs cannot attribute a previous employee's actions to a new login",
   const route=withAccount(async()=>{throw new Error("must not run");});assert.equal((await route(req)).status,401);
 });
 test("original supplier CSV files remain import-compatible when locally available",async(t)=>{
-  const files=["/Users/keyon/Downloads/request-logs-2026-11-03033553.csv","/Users/keyon/Downloads/request-logs-2026-11-03034137.csv"];
+  const files=["/Users/keyon/Downloads/request-logs-2026-11-03033553.csv","/Users/keyon/Downloads/request-logs-2026-11-03034137.csv","/Users/keyon/Downloads/request-logs-2026-11-04072208.csv"];
   for(const file of files){
     let text:string;try{text=await readFile(file,"utf8");}catch{t.skip("Local private CSV not available in this checkout");return;}
     assert(parseBillingCsv(text).length>0);
   }
+});
+
+test("blank supplier fees stay unknown, known zero is billed, and overlapping exports only add new records",async()=>{
+  const id=randomUUID(),zeroId=randomUUID();
+  const call=await seedCall("blank-fee",id),zeroCall=await seedCall("blank-fee",zeroId);
+  const blank=csv(id,"blank-fee",`Pinwu/1.0 call/${call}`,"").replace(",,200",",,502");
+  const zero=csv(zeroId,"blank-fee",`Pinwu/1.0 call/${zeroCall}`,"0");
+  const file=blank+zero.split("\n")[1]+"\n";
+  const preview=await importBilling(file,"blank.csv",admin.user.id,false);
+  assert.equal(preview.missingCost,1);assert.equal(preview.matched,2);assert.equal(preview.added,2);
+  assert.equal((await query("SELECT * FROM account_bills WHERE request_id=$1",[id])).length,0);
+  const saved=await importBilling(file,"blank.csv",admin.user.id,true);assert.equal(saved.addedCost,"0.000000000");
+  assert.equal((await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0].cost_nano,null);
+  let body=await (await overview(request("/api/admin/overview?model=blank-fee",admin))).json();
+  assert.equal(body.totals.calls,2);assert.equal(body.totals.billed,1);assert.equal(body.totals.missing_cost,1);assert.equal(body.totals.missing_bill,0);
+  assert.equal(body.calls.find((c:any)=>c.id===call).cost,null);assert.equal(body.calls.find((c:any)=>c.id===call).bill_request_id,id);
+  const repeat=await importBilling(file,"repeat.csv",admin.user.id,true);assert.equal(repeat.added,0);assert.equal(repeat.duplicates,2);assert.equal(repeat.updatedCosts,0);
+  const newId=randomUUID();const next=file+csv(newId,"blank-fee","external","0.25").split("\n")[1]+"\n";
+  const overlap=await importBilling(next,"next-day.csv",admin.user.id,true);assert.equal(overlap.added,1);assert.equal(overlap.duplicates,2);assert.equal(overlap.addedCost,"0.250000000");
+  const filled=csv(id,"blank-fee",`Pinwu/1.0 call/${call}`,"0.012");
+  const fillPreview=await importBilling(filled,"filled.csv",admin.user.id,false);assert.equal(fillPreview.updatedCosts,1);assert.equal(fillPreview.addedCost,"0.012000000");
+  assert.equal((await query("SELECT cost_nano FROM account_bills WHERE request_id=$1",[id]))[0].cost_nano,null);
+  const fill=await importBilling(filled,"filled.csv",admin.user.id,true);assert.equal(fill.added,0);assert.equal(fill.updatedCosts,1);
+  await importBilling(blank,"old-export.csv",admin.user.id,true);
+  body=await (await overview(request("/api/admin/overview?model=blank-fee",admin))).json();assert.equal(body.totals.billed,2);assert.equal(body.totals.missing_cost,0);assert.equal(body.totals.cost,"0.012000000");
+  const bill=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];assert.equal(bill.cost_nano,12000000);assert.equal(bill.status,"200");
+  assert.equal((await importBilling(filled,"repeat-filled.csv",admin.user.id,true)).updatedCosts,0);
+  await assert.rejects(importBilling(csv(id,"blank-fee",`Pinwu/1.0 call/${call}`,"1"),"conflict.csv",admin.user.id,true),/不一致/);
+});
+
+test("invalid nonempty fees identify the CSV record; unmatched empty fees remain visible",async()=>{
+  for(const amount of ["-1","bad","1e-7","0.0000000001"]){assert.throws(()=>parseBillingCsv(csv(randomUUID(),"model","external",amount)),/第 2 条 CSV 记录.*cost_usd/);}
+  const id=randomUUID();const input=csv(id,"external-empty","external","   ");
+  const parsed=parseBillingCsv(input);assert.equal(parsed[0].costNano,null);
+  const saved=await importBilling(input,"empty.csv",admin.user.id,true);assert.equal(saved.unmatched,1);assert.equal(saved.missingCost,1);assert.equal(saved.unmatchedExamples[0].cost,null);
+  const body=await (await overview(request("/api/admin/overview",admin))).json();assert.equal(body.unmatchedRows.find((r:any)=>r.request_id===id).cost,null);assert(Number(body.unmatched.missing_cost)>=1);
+});
+
+test("legacy billing migration preserves costs, links and unique constraints and is repeatable",async()=>{
+  const moduleName="node:sqlite";const {DatabaseSync}=await import(moduleName);const db=new DatabaseSync(":memory:");
+  try {
+    const q=async(sql:string)=>db.prepare(sql).all();
+    await initializeAccountSchema(q,false);
+    db.exec("DROP TABLE account_bills; CREATE TABLE account_bills (request_id TEXT PRIMARY KEY,call_id TEXT UNIQUE REFERENCES account_calls(id),model TEXT NOT NULL,user_agent TEXT NOT NULL,billed_at TEXT NOT NULL,cost_nano BIGINT NOT NULL,status TEXT NOT NULL,imported_at TEXT NOT NULL,import_id TEXT NOT NULL); INSERT INTO account_bills VALUES('legacy-bill',NULL,'model','external','time',123456789,'200','time','import'); BEGIN IMMEDIATE;");
+    await initializeAccountSchema(q,false);db.exec("COMMIT");
+    const row=db.prepare("SELECT * FROM account_bills").get();assert.equal(row.request_id,"legacy-bill");assert.equal(row.cost_nano,123456789);assert.equal(row.import_id,"import");
+    db.exec("INSERT INTO account_bills VALUES('unknown-bill',NULL,'model','external','time',NULL,'502','time','import')");
+    assert.throws(()=>db.exec("INSERT INTO account_bills SELECT * FROM account_bills WHERE request_id='legacy-bill'"),/UNIQUE/);
+    await initializeAccountSchema(q,false);assert.equal(db.prepare("SELECT COUNT(*) n FROM account_bills").get().n,2);
+    assert.equal(db.prepare("SELECT cost_nano FROM account_bills WHERE request_id='unknown-bill'").get().cost_nano,null);
+    assert.equal(db.prepare("PRAGMA foreign_key_list(account_bills)").all()[0].table,"account_calls");
+  } finally {db.close();}
+});
+
+test("the reported 608-row export imports fully and a second import adds nothing",async(t)=>{
+  let text:string;
+  try{text=await readFile("/Users/keyon/Downloads/request-logs-2026-11-04072208.csv","utf8");}catch{t.skip("Private regression CSV is not installed");return;}
+  const records=parseBillingCsv(text);assert.equal(records.length,608);assert.equal(records.filter(r=>r.costNano===null).length,1);
+  const prior=(await query("SELECT COUNT(*) n FROM account_bills"))[0].n;
+  const result=await importBilling(text,"regression.csv",admin.user.id,true);assert.equal(result.added,608);assert.equal(result.missingCost,1);
+  assert.equal((await query("SELECT COUNT(*) n FROM account_bills"))[0].n,prior+608);
+  const replay=await importBilling(text,"next-day-overlap.csv",admin.user.id,true);assert.equal(replay.added,0);assert.equal(replay.duplicates,608);assert.equal(replay.addedCost,"0.000000000");
+  assert.equal((await query("SELECT COUNT(*) n FROM account_bills"))[0].n,prior+608);
 });
 
 test("creating and resetting accounts accepts 8 characters and rejects shorter or oversized passwords",async()=>{
