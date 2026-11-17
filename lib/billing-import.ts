@@ -5,6 +5,23 @@ import { transaction, type Query } from "./account-db";
 
 // Supplier identifiers are opaque: text UUIDs and image img_<hex> IDs both occur in real exports.
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,199}$/;
+type BillingRecord = { requestId: string; model: string; requestedModel: string; costNano: number | null; time: string; ua: string; status: string };
+
+// A supplier retry can reuse an ID: retain the successful charged result, not
+// its earlier unpriced failure. Never reconcile different identities or fees.
+function reconcileRecord(a: BillingRecord, b: BillingRecord): BillingRecord | null {
+  if (a.requestId !== b.requestId || a.model !== b.model || a.ua !== b.ua ||
+    (a.requestedModel && b.requestedModel && a.requestedModel !== b.requestedModel)) return null;
+  if (a.costNano === b.costNano && a.time === b.time && a.status === b.status) return a;
+  if ((a.costNano === null) === (b.costNano === null)) return null;
+  const known = a.costNano !== null ? a : b;
+  const unknown = a.costNano === null ? a : b;
+  // Preserve the existing same-timestamp missing-fee backfill behavior.
+  if (known.time === unknown.time) return known;
+  if (/^2\d\d$/.test(known.status) && /^[45]\d\d$/.test(unknown.status) &&
+    Date.parse(known.time) > Date.parse(unknown.time)) return known;
+  return null;
+}
 export function costToNano(value: string) {
   if (!/^\d{1,7}(?:\.\d{1,9})?$/.test(value)) throw new AccountError("费用格式无效，需非负数且最多 9 位小数。");
   const [integer, fraction = ""] = value.split(".");
@@ -24,8 +41,8 @@ export function parseBillingCsv(csv: string) {
   catch { throw new AccountError("CSV 格式无法解析，请使用 65535 后台原始导出文件。"); }
   if (!rows.length || rows.length > 10000) throw new AccountError("每次请导入 1–10000 条记录。");
   if (new Set(columns).size !== columns.length || ["request_id", "model", "cost_usd", "time", "user_agent", "status"].some((key) => !columns.includes(key))) throw new AccountError("缺少请求编号、模型、费用、时间、UA 或状态列，或存在重复列名。");
-  const seen = new Map<string, string>();
-  return rows.map((r, i) => {
+  const seen = new Map<string, BillingRecord>();
+  const records = rows.map((r, i) => {
     if (!ID.test(r.request_id) || !r.model || r.model.length > 150 || !Number.isFinite(Date.parse(r.time)) || !/(Z|[+-]\d\d:\d\d)$/.test(r.time)) throw new AccountError(`第 ${i + 2} 行的编号、模型或时间格式无效。`);
     if (r.user_agent.length > 1000) throw new AccountError(`第 ${i + 2} 行 UA 过长。`);
     let costNano: number | null = null;
@@ -34,11 +51,15 @@ export function parseBillingCsv(csv: string) {
       catch (error) { throw new AccountError(`第 ${i + 2} 条 CSV 记录（含表头）的 cost_usd 无效：${error instanceof Error ? error.message : "费用格式无效"}`); }
     }
     const record = { requestId: r.request_id, model: r.model, requestedModel: r.requested_model || "", costNano, time: new Date(r.time).toISOString(), ua: r.user_agent, status: r.status.slice(0, 60) };
-    const signature = JSON.stringify(record);
-    if (seen.has(record.requestId) && seen.get(record.requestId) !== signature) throw new AccountError(`同一请求编号存在不同内容：第 ${i + 2} 行。`);
-    seen.set(record.requestId, signature);
+    const previous = seen.get(record.requestId);
+    const resolved = previous ? reconcileRecord(previous, record) : record;
+    if (!resolved) throw new AccountError(`同一请求编号存在不同内容：第 ${i + 2} 行。`);
+    seen.set(record.requestId, resolved);
     return record;
   });
+  // Keep source row counts for the preview; every occurrence uses the same
+  // resolved record so import order cannot change the charged result.
+  return records.map((record) => seen.get(record.requestId)!);
 }
 async function matchCall(q: Query, record: ReturnType<typeof parseBillingCsv>[number]) {
   const ua = /^Pinwu\/1\.0 call\/[a-f0-9-]{36}$/.test(record.ua) ? record.ua : "";
@@ -62,9 +83,7 @@ export async function importBilling(csv: string, filename: string, userId: strin
       if (record.costNano === null) summary.missingCost++;
       const [existing] = await q("SELECT * FROM account_bills WHERE request_id=$1", [record.requestId]);
       const fillsMissingCost = existing && existing.cost_nano === null && record.costNano !== null;
-      const olderMissingCost = existing && existing.cost_nano !== null && record.costNano === null;
-      if (existing && (existing.model !== record.model || existing.billed_at !== record.time || existing.user_agent !== record.ua ||
-        (!fillsMissingCost && !olderMissingCost && (String(existing.cost_nano) !== String(record.costNano) || existing.status !== record.status)))) throw new AccountError("这份账单与已导入的同一请求记录内容不一致，已停止导入，请核对原始账单。");
+      if (existing && !reconcileRecord({ requestId: String(existing.request_id), model: String(existing.model), requestedModel: "", costNano: existing.cost_nano === null ? null : Number(existing.cost_nano), time: String(existing.billed_at), ua: String(existing.user_agent), status: String(existing.status) }, record)) throw new AccountError("这份账单与已导入的同一请求记录内容不一致，已停止导入，请核对原始账单。");
       let callId = existing?.call_id || await matchCall(q, record);
       if(callId && claimedCalls.has(callId)) callId=null;
       if(callId) claimedCalls.add(callId);
@@ -74,7 +93,7 @@ export async function importBilling(csv: string, filename: string, userId: strin
           summary.updatedCosts++;
           total += BigInt(record.costNano!);
           if (total > BigInt(Number.MAX_SAFE_INTEGER)) throw new AccountError("费用汇总超出可核算范围。");
-          if (commit) await q("UPDATE account_bills SET cost_nano=$1,status=$2,imported_at=$3,import_id=$4 WHERE request_id=$5", [record.costNano,record.status,now,importId,record.requestId]);
+          if (commit) await q("UPDATE account_bills SET cost_nano=$1,status=$2,imported_at=$3,import_id=$4,billed_at=$6 WHERE request_id=$5", [record.costNano,record.status,now,importId,record.requestId,record.time]);
         }
         if (!existing.call_id && callId) {
           summary.relinked++;

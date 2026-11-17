@@ -205,6 +205,74 @@ test("the reported 608-row export imports fully and a second import adds nothing
   assert.equal((await query("SELECT COUNT(*) n FROM account_bills"))[0].n,prior+608);
 });
 
+function retryBill(id:string,success:boolean,cost="0.180000") {
+  return csv(id,"retry-image","external",success?cost:"")
+    .replace("2026-11-03T03:40:00Z",success?"2026-11-11T06:19:52Z":"2026-11-11T06:19:16Z")
+    .replace(",,200",",,502");
+}
+test("failed and successful duplicate IDs resolve in either row order without double charging",async()=>{
+  for(const successFirst of [true,false]) {
+    const id=randomUUID(),success=retryBill(id,true),failed=retryBill(id,false);
+    const input=successFirst?success+failed.split("\n")[1]+"\n":failed+success.split("\n")[1]+"\n";
+    const preview=await importBilling(input,"retry.csv",admin.user.id,false);
+    assert.equal(preview.rows,2);assert.equal(preview.added,1);assert.equal(preview.duplicates,1);
+    assert.equal(preview.missingCost,0);assert.equal(preview.addedCost,"0.180000000");
+    assert.equal((await query("SELECT * FROM account_bills WHERE request_id=$1",[id])).length,0);
+    const saved=await importBilling(input,"retry.csv",admin.user.id,true);assert.equal(saved.added,1);
+    const bill=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];
+    assert.equal(bill.cost_nano,180000000);assert.equal(bill.status,"200");assert.equal(bill.billed_at,"2026-11-11T06:19:52.000Z");
+    const replay=await importBilling(input,"retry-again.csv",admin.user.id,true);
+    assert.equal(replay.added,0);assert.equal(replay.duplicates,2);assert.equal(replay.updatedCosts,0);assert.equal(replay.addedCost,"0.000000000");
+    const old=await importBilling(failed,"older-failure.csv",admin.user.id,true);assert.equal(old.updatedCosts,0);
+    assert.deepEqual((await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0],bill);
+  }
+});
+test("a previously imported failure is backfilled with successful retry time and fee, including zero",async()=>{
+  for(const amount of ["0.180000","0"]) {
+    const id=randomUUID(),failed=retryBill(id,false),success=retryBill(id,true,amount);
+    await importBilling(failed,"failed.csv",admin.user.id,true);
+    const preview=await importBilling(success,"success.csv",admin.user.id,false);assert.equal(preview.updatedCosts,1);
+    assert.equal((await query("SELECT cost_nano FROM account_bills WHERE request_id=$1",[id]))[0].cost_nano,null);
+    const filled=await importBilling(success,"success.csv",admin.user.id,true);
+    assert.equal(filled.added,0);assert.equal(filled.updatedCosts,1);assert.equal(filled.addedCost,nanoToCost(costToNano(amount)));
+    const bill=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];
+    assert.equal(bill.cost_nano,costToNano(amount));assert.equal(bill.billed_at,"2026-11-11T06:19:52.000Z");assert.equal(bill.status,"200");
+    await importBilling(failed,"old-failure.csv",admin.user.id,true);
+    assert.deepEqual((await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0],bill);
+  }
+});
+test("retry reconciliation still rejects identity, fee and ambiguous time or status conflicts atomically",async()=>{
+  const id=randomUUID(),failed=retryBill(id,false),success=retryBill(id,true);
+  const conflicts=[
+    success.replace("retry-image","other-model"),
+    success.replace("external","other-source"),
+    success.replace("06:19:52","06:18:00"),
+    success.replace(",200",",502"),
+  ];
+  for(const conflict of conflicts) assert.throws(()=>parseBillingCsv(failed+conflict.split("\n")[1]+"\n"),/不同内容/);
+  await importBilling(success,"success.csv",admin.user.id,true);
+  const before=(await query("SELECT COUNT(*) n FROM account_bills"))[0].n;
+  for(const conflict of [...conflicts,retryBill(id,true,"0.19")]) {
+    if(conflict===success) continue;
+    const combined=retryBill(randomUUID(),true)+conflict.split("\n")[1]+"\n";
+    await assert.rejects(importBilling(combined,"conflict.csv",admin.user.id,true),/不一致/);
+    assert.equal((await query("SELECT COUNT(*) n FROM account_bills"))[0].n,before);
+  }
+  assert.throws(()=>parseBillingCsv(success+retryBill(id,true,"0.19").split("\n")[1]+"\n"),/不同内容/);
+});
+test("November 17 retry export imports and replays without duplicate charges",async(t)=>{
+  const file=process.env.PINWU_BILLING_REGRESSION_CSV;
+  if(!file){t.skip("Private CSV regression is opt-in");return;}
+  const text=await readFile(file,"utf8"),records=parseBillingCsv(text);
+  assert.equal(records.length,3329);assert.equal(new Set(records.map(r=>r.requestId)).size,3326);
+  const first=await importBilling(text,"nov17.csv",admin.user.id,true);
+  const before=await query("SELECT COUNT(*) n, SUM(cost_nano) cost FROM account_bills");
+  const repeat=await importBilling(text,"nov17-repeat.csv",admin.user.id,true);
+  assert.equal(first.rows,3329);assert.equal(repeat.added,0);assert.equal(repeat.duplicates,3329);
+  assert.equal(repeat.updatedCosts,0);assert.equal(repeat.addedCost,"0.000000000");
+  assert.deepEqual(await query("SELECT COUNT(*) n, SUM(cost_nano) cost FROM account_bills"),before);
+});
+
 test("creating and resetting accounts accepts 8 characters and rejects shorter or oversized passwords",async()=>{
   for(const value of ["short77","x".repeat(129)]) {
     const response=await addUser(request("/api/admin/users",admin,{username:"eight-test",displayName:"密码长度测试",password:value}));
