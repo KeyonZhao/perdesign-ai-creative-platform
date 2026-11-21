@@ -143,7 +143,7 @@ export function ImageUploader({
                 disabled={Boolean(value && inputMode !== "product")}
               >
                 <ImageIcon className={`h-3.5 w-3.5 ${inputMode === "product" ? "text-violet-200" : ""}`} />
-                产品原图
+                原图
               </button>
               <button
                 type="button"
@@ -153,7 +153,7 @@ export function ImageUploader({
                 disabled={Boolean(value && inputMode !== "sketch")}
               >
                 <PenLine className={`h-3.5 w-3.5 ${inputMode === "sketch" ? "text-violet-200" : ""}`} />
-                设计草图
+                草图
               </button>
             </div>
           </div>
