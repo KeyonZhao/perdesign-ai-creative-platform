@@ -168,21 +168,14 @@ export async function streamChatCompletion(
   return { content, finishReason };
 }
 
-const PROMPT_OPTIMIZER_SYSTEM_PROMPT = `你是一名具备多模态理解能力的工业设计提示词架构师。你的任务不是机械扩写，也不是堆砌“高清、4K、科技感、高级感”等词，而是结合用户当前文字与上传图片，生成一段可直接提交给图像生成模型的中文产品设计提示词。
+export const OPTIMIZED_PROMPT_MAX_CHARACTERS = 300;
 
-始终遵守以下原则：
-1. 若用户提供“产品名称”，它定义最终要生成的产品主体，必须在最终提示词中明确体现；若未提供产品名称，则根据主体图片和用户文字可靠判断产品品类，不确定时使用中性产品表达，不得臆造。用户最新文字要求优先级最高。保留用户当前提示词中的全部明确要求，包括用户在上次优化后手动补充或修改的内容，不得擅自删除、反转或替换核心意图。
-2. 产品图或产品草图决定设计主体和需要保留的内容；设计参考图只提供适合迁移的造型、CMF、材质、工艺、细节或渲染语言。若只有参考图，则由用户文字决定目标品类；用户未指定品类且图片品类清晰时，可生成同品类的新设计，但不得直接复制完整外形；图片品类无法可靠判断时，使用中性的工业产品概念表达，不得虚构具体功能。
-3. 必须真实读取图片。只能描述可见的品类、轮廓、比例、体块、结构、部件、材质、颜色、工艺、视角和画面特征；无法确认的信息使用中性表达，不得虚构功能、接口、内部结构、品牌或使用方式。
-4. 先在内部判断任务属于：纯文字生成、草图效果图、现有产品优化、局部修改、整体重设计、参考语言迁移、材质/配色调整、场景图、渲染风格或视角调整。不要向用户展示判断和分析过程。
-5. 局部修改时，只调整用户指定区域，明确周围衔接方式，其余轮廓、结构、材质、颜色、视角保持不变。整体优化默认适度调整；只有用户明确要求全新方案、完全不同造型或大幅重构时才进行整体重设计。
-6. 有主体图时，说明需要保留的品类、必要功能、轮廓、比例、主要结构、部件位置、安装或人机关系以及未指定区域。有参考图时，筛选真正适合目标产品的特征，具体说明参考什么、应用到主体哪里、如何转化；不得迁移参考图特定品类的按钮、接口、功能部件和完整结构。
-7. 草图作为主体时，严格保留草图轮廓、比例、结构分区、主要部件位置、视角和核心创意，只补充合理曲面、厚度、倒角、分件、装配、CMF和真实产品细节。
-8. 将“高级、科技、精致、圆润”等模糊要求转化为具体可执行的曲面、切面、体块、分层、分件、材质对比、配色比例、工艺、装配缝隙和灯光表达，但不得擅自增加赛博朋克、机械装甲、透明发光、仿生或复杂灯带等用户未提出的方向。
-9. 默认保证结构完整、连接合理、分件清晰、材质与工艺匹配、符合实际使用方式和可生产性；避免悬浮部件、错误连接、无意义开孔和装饰堆砌。
-10. 最终提示词自然组织，不使用固定标题、编号列表或Markdown。根据复杂度控制长度：纯文字约150至300字；单张图片约250至500字；主体图加参考图约350至700字；任何情况不超过800字。
-
-只输出最终提示词。禁止输出图片分析、角色判断、推理过程、置信度、优化建议、解释段落或“以下是优化后的提示词”等开场语。`;
+const PROMPT_OPTIMIZER_SYSTEM_PROMPT = `将用户文字与图片整理成可直接生图的精炼中文工业设计提示词。通常120至220字，简单局部修改可更短，任何情况最多${OPTIMIZED_PROMPT_MAX_CHARACTERS}个字符（含标点、空格和英文）。不要为了凑字数扩写。
+用户最新明确要求、产品品类、必须保留和禁止改变的内容优先；合并重复表达，不删改这些约束。产品名称决定目标主体，无法判断的内容不臆造。
+读取图片但不复述整张图。产品图定义主体；草图须保留轮廓、比例、结构分区、部件位置与视角；参考图仅迁移适合目标产品的设计语言，不搬用其品类、功能或完整结构。局部修改只写改动及其余保持不变，不重新设计产品或场景。
+围绕用户意图选择2至3个最有辨识度的造型或材质特征，形成统一设计方向；用清楚的比例、轮廓、曲面或材质关系表达美感。少量补充与任务相符的构图、光线即可。未指定的微小零件、接口、尺寸、工艺参数不编造，不逐项列举结构细节，不堆砌装饰、灯带、画质词或长串负面词。
+整体设计默认适度优化；用户要求大幅创新时才重构，明确保留条件始终优先。结构连接与材质表达应合理，留出视觉探索空间。压缩时先删重复、套话和自行补充的细节，再精炼句子；不得为缩短篇幅反转用户要求。
+只输出一段完整提示词，无标题、列表、Markdown、解释、分析或开场白。输出前检查长度和约束。`;
 
 export async function optimizeUserPrompt(params: {
   baseUrl?: string;
@@ -236,7 +229,7 @@ export async function optimizeUserPrompt(params: {
         `用户当前文字：${params.userPrompt.trim() || "用户尚未输入其他文字，请根据当前图片关系生成完整、准确且可执行的提示词。"}`,
         imageRoles.length ? `平台已明确图片角色：${imageRoles.join("；")}。` : "当前没有上传图片，不得描述或引用不存在的图片。",
         `当前创新度：${Math.max(0, Math.min(100, params.innovationLevel ?? 50))}%。创新度仅决定造型变化幅度，用户明确的局部修改、保留要求和草图忠实度优先级更高。`,
-        "请在内部完成任务类型、目标品类、主体/参考关系、保留/修改/禁止关系和可生产性分析，然后只输出一段可直接生图的中文提示词。"
+        `只输出精炼的最终提示词，通常120至220字，最多${OPTIMIZED_PROMPT_MAX_CHARACTERS}个字符；明确要求优先，不复述图片，不额外堆砌细节。`
       ].join("\n")
     }
   ];
@@ -253,7 +246,7 @@ export async function optimizeUserPrompt(params: {
   for (let attempt = 0; attempt < attemptModels.length; attempt += 1) {
     let optimizedPrompt = "";
     try {
-      await streamChatCompletion({
+      const result = await streamChatCompletion({
         baseUrl: params.baseUrl,
         apiKey: params.apiKey,
         model: attemptModels[attempt],
@@ -269,11 +262,18 @@ export async function optimizeUserPrompt(params: {
         optimizedPrompt += contentDelta;
       });
       const normalizedPrompt = optimizedPrompt.trim();
-      if (normalizedPrompt) return normalizedPrompt;
-      lastError = new Error("接口没有返回有效的提示词内容。");
+      // Never truncate a prompt: its final sentence may contain a critical constraint.
+      if (result.finishReason === "length") {
+        lastError = new Error("提示词未完整生成，请重试；原文字未修改。");
+      } else if (Array.from(normalizedPrompt).length > OPTIMIZED_PROMPT_MAX_CHARACTERS) {
+        lastError = new Error(`提示词超过${OPTIMIZED_PROMPT_MAX_CHARACTERS}字上限，请重试；原文字未修改。`);
+      } else if (normalizedPrompt) {
+        return normalizedPrompt;
+      } else {
+        lastError = new Error("接口没有返回有效的提示词内容。");
+      }
     } catch (error) {
-      const partialPrompt = optimizedPrompt.trim();
-      if (partialPrompt.length >= 80) return partialPrompt;
+      // A timed-out partial stream is not a complete, validated prompt.
       lastError = error;
     }
   }
