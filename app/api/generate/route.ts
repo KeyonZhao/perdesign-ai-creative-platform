@@ -9,6 +9,7 @@ export const maxDuration = 60;
 const BRAIN_MODEL = "gpt-5.5";
 
 const requestSchema = z.object({
+  productInputMode: z.enum(["product", "sketch", "structure"]).optional().default("product"),
   imageApiKey: z.string().min(1, "请先填写生图 API Key。"),
   imageApiBaseUrl: z.string().url("请填写有效的生图请求地址。"),
   chatApiKey: z.string().optional().default(""),
@@ -53,7 +54,8 @@ async function handlePOST(request: Request) {
       payload.requirement,
       1,
       Boolean(payload.sketchImageBase64 || payload.imageBase64),
-      payload.useExactPrompt
+      payload.useExactPrompt,
+      payload.productInputMode === "structure" && Boolean(payload.imageBase64)
     )[0];
 
     const submission = await submitConceptImage({
@@ -106,6 +108,7 @@ async function submitConceptImage({
       prompt: conceptPrompt,
       hasSketchImage,
       hasProductImage: Boolean(payload.imageBase64),
+      hasStructureImage: payload.productInputMode === "structure" && Boolean(payload.imageBase64),
       innovationLevel: payload.innovationLevel,
       hasReference: hasReferenceImage,
       useExactPrompt: payload.useExactPrompt,
@@ -131,7 +134,8 @@ function buildDirectConcepts(
   requirement: string,
   count: number,
   hasProductImage: boolean,
-  useExactPrompt: boolean
+  useExactPrompt: boolean,
+  hasStructureImage = false
 ) {
   const targetProduct = productName.trim();
   const userRequirement = requirement.trim();
@@ -147,6 +151,8 @@ function buildDirectConcepts(
     : "";
   const taskConstraint = userRequirement
     ? `用户文字描述（保持原意并完整执行）：${userRequirement}`
+    : hasStructureImage
+      ? "以内部器件体量、位置和功能空间为约束，设计全新完整外壳，不沿用结构件的外形，使用真实材质与干净背景。"
     : hasProductImage
       ? "在保留主体产品必要结构、比例和使用关系的基础上，生成高完成度、可量产的工业设计方案，使用真实材质与干净背景。"
       : "生成高完成度、可量产的工业产品设计方案，明确合理结构、CMF、真实材质与干净背景。";

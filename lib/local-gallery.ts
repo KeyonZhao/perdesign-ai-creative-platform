@@ -147,6 +147,7 @@ async function storeBatch(batch: GenerationBatch, createdAt: number): Promise<St
     metadata: batch.metadata
       ? {
           description: batch.metadata.description,
+          productInputMode: batch.metadata.productInputMode,
           imageModel: batch.metadata.imageModel,
           generationStartedAt: batch.metadata.generationStartedAt,
           expectedResultCount: batch.metadata.expectedResultCount,
@@ -177,6 +178,7 @@ async function restoreBatch(batch: StoredGenerationBatch): Promise<GenerationBat
     metadata: batch.metadata
       ? {
           description: batch.metadata.description,
+          productInputMode: batch.metadata.productInputMode,
           imageModel: batch.metadata.imageModel,
           generationStartedAt: batch.metadata.generationStartedAt,
           expectedResultCount: batch.metadata.expectedResultCount,

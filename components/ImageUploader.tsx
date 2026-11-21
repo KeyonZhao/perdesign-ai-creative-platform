@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Image as ImageIcon, ImagePlus, PenLine, Trash2, UploadCloud, X } from "lucide-react";
+import { Box, Image as ImageIcon, ImagePlus, PenLine, Trash2, UploadCloud, X } from "lucide-react";
 import type { ProductInputMode, UploadedImage } from "@/lib/types";
 import { formatBytes, getGalleryDraggedImage } from "@/lib/image";
 
@@ -123,7 +123,18 @@ export function ImageUploader({
       <div className={uploadSurfaceClass} {...interactionProps}>
         {inputMode && onInputModeChange ? (
           <div className="flex justify-center px-4 pt-3.5">
-            <div className="inline-grid grid-cols-2 gap-0.5 rounded-[10px] border border-white/[0.07] bg-black/20 p-1" role="group" aria-label="产品图类型">
+            <div className="inline-grid grid-cols-3 gap-0.5 rounded-[10px] border border-white/[0.07] bg-black/20 p-1" role="group" aria-label="产品图类型">
+              <button
+                type="button"
+                className={`flex h-7 items-center justify-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] font-medium transition ${inputMode === "structure" ? "border-violet-400/35 bg-white/[0.075] text-white shadow-[0_0_12px_rgba(111,76,255,0.13),inset_-1px_0_0_rgba(139,108,255,0.42)]" : value ? "cursor-not-allowed border-transparent text-zinc-700" : "border-transparent text-zinc-500 hover:bg-white/[0.045] hover:text-zinc-300"}`}
+                onClick={() => onInputModeChange("structure")}
+                aria-pressed={inputMode === "structure"}
+                disabled={Boolean(value && inputMode !== "structure")}
+                title="保留内部布局，重新设计外壳"
+              >
+                <Box className={`h-3.5 w-3.5 ${inputMode === "structure" ? "text-violet-200" : ""}`} />
+                结构图
+              </button>
               <button
                 type="button"
                 className={`flex h-7 items-center justify-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] font-medium transition ${inputMode === "product" ? "border-violet-400/35 bg-white/[0.075] text-white shadow-[0_0_12px_rgba(111,76,255,0.13),inset_-1px_0_0_rgba(139,108,255,0.42)]" : value ? "cursor-not-allowed border-transparent text-zinc-700" : "border-transparent text-zinc-500 hover:bg-white/[0.045] hover:text-zinc-300"}`}

@@ -1784,7 +1784,7 @@ export function ImagePreviewModal({
                 <span className="image-preview-info-label">输入图片</span>
                 <div className="image-preview-source-grid">
                   <SourceImagePreview label="草图" image={metadata?.sketchImage} />
-                  <SourceImagePreview label="产品图" image={metadata?.productImage} />
+                  <SourceImagePreview label={metadata?.productInputMode === "structure" ? "结构图" : "产品图"} image={metadata?.productImage} />
                   {recordedReferenceImages.length
                     ? recordedReferenceImages.map((image, index) => (
                         <SourceImagePreview

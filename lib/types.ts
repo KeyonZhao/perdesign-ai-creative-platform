@@ -11,7 +11,7 @@ export type UploadedImage = {
   dataUrl: string;
 };
 
-export type ProductInputMode = "product" | "sketch";
+export type ProductInputMode = "product" | "sketch" | "structure";
 
 export type ConceptPrompt = {
   title: string;
@@ -79,6 +79,7 @@ export type GenerationType =
   | "video";
 
 export type GenerationMetadata = {
+  productInputMode?: ProductInputMode;
   productName?: string;
   imageModel?: string;
   generationStartedAt?: number;

@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const requestSchema = z.object({
+  productInputMode: z.enum(["product", "sketch", "structure"]).optional().default("product"),
   apiKey: z.string().min(1, "请先填写对话 API Key。"),
   baseUrl: z.string().url("请填写有效的对话请求地址。"),
   model: z.string().min(1, "请选择大脑模型。"),

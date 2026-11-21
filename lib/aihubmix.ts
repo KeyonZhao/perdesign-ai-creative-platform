@@ -3,7 +3,8 @@ import { appendFile, mkdir } from "fs/promises";
 import { z } from "zod";
 import { imageModels } from "./models";
 import { buildPromptRepair, readSystemPrompt } from "./prompts";
-import type { ConceptPrompt } from "./types";
+import type { ConceptPrompt, ProductInputMode } from "./types";
+import { buildStructureDesignInstruction } from "./structure-design";
 import { getDataUrlMime } from "./image";
 import { getFriendlyAiError, makeId } from "./utils";
 
@@ -178,6 +179,7 @@ const PROMPT_OPTIMIZER_SYSTEM_PROMPT = `将用户文字与图片整理成可直�
 只输出一段完整提示词，无标题、列表、Markdown、解释、分析或开场白。输出前检查长度和约束。`;
 
 export async function optimizeUserPrompt(params: {
+  productInputMode?: ProductInputMode;
   baseUrl?: string;
   apiKey: string;
   model: string;
@@ -191,6 +193,7 @@ export async function optimizeUserPrompt(params: {
 }) {
   const productName = params.productName.trim();
   const hasProduct = Boolean(params.productImageBase64);
+  const hasStructure = hasProduct && params.productInputMode === "structure";
   const hasSketch = Boolean(params.sketchImageBase64);
   const referenceImages = [
     ...(params.referenceImageBase64 ? [params.referenceImageBase64] : []),
@@ -204,7 +207,9 @@ export async function optimizeUserPrompt(params: {
   const imageRoles: string[] = [];
   let imageIndex = 1;
   if (hasProduct) {
-    imageRoles.push(`图片${imageIndex}是产品原图，是最终设计主体`);
+    imageRoles.push(hasStructure
+      ? `图片${imageIndex}是内部结构图，只约束内部体量与布局，不约束外壳外形`
+      : `图片${imageIndex}是产品原图，是最终设计主体`);
     imageIndex += 1;
   }
   if (hasSketch) {
@@ -228,7 +233,9 @@ export async function optimizeUserPrompt(params: {
             : "用户未填写产品名称，请依据用户文字确定最终产品品类；无法可靠确定时使用中性工业产品表达。",
         `用户当前文字：${params.userPrompt.trim() || "用户尚未输入其他文字，请根据当前图片关系生成完整、准确且可执行的提示词。"}`,
         imageRoles.length ? `平台已明确图片角色：${imageRoles.join("；")}。` : "当前没有上传图片，不得描述或引用不存在的图片。",
-        `当前创新度：${Math.max(0, Math.min(100, params.innovationLevel ?? 50))}%。创新度仅决定造型变化幅度，用户明确的局部修改、保留要求和草图忠实度优先级更高。`,
+        hasStructure
+          ? buildStructureDesignInstruction(params.innovationLevel)
+          : `当前创新度：${Math.max(0, Math.min(100, params.innovationLevel ?? 50))}%。创新度仅决定造型变化幅度，用户明确的局部修改、保留要求和草图忠实度优先级更高。`,
         `只输出精炼的最终提示词，通常120至220字，最多${OPTIMIZED_PROMPT_MAX_CHARACTERS}个字符；明确要求优先，不复述图片，不额外堆砌细节。`
       ].join("\n")
     }
@@ -469,6 +476,7 @@ function extractJsonArray(text: string) {
 }
 
 export async function submitAsyncImageEdit(params: {
+  hasStructureImage?: boolean;
   baseUrl?: string;
   apiKey: string;
   imageModel: string;
@@ -558,6 +566,7 @@ export async function submitAsyncImageEdit(params: {
     quality: params.quality,
     hasSketchImage: Boolean(params.hasSketchImage),
     hasProductImage: Boolean(params.hasProductImage),
+    hasStructureImage: Boolean(params.hasStructureImage),
     hasReference: Boolean(params.hasReference),
     innovationLevel: params.innovationLevel ?? 50,
     inputImageCount: params.inputImages.length + (useMaskAsGuideImage ? 1 : 0),
@@ -812,6 +821,7 @@ export async function getAsyncImageJob(params: {
 function buildImageEditPrompt(
   prompt: string,
   options: {
+    hasStructureImage?: boolean;
     hasSketchImage?: boolean;
     hasProductImage?: boolean;
     hasReference?: boolean;
@@ -844,6 +854,14 @@ function buildImageEditPrompt(
 
   if (options.hasSketchImage) {
     return buildSketchRenderingPrompt(trimmedPrompt, options);
+  }
+
+  if (options.hasStructureImage) {
+    return [
+      buildStructureDesignInstruction(innovationLevel),
+      options.hasReference ? "图片2及后续图片是设计参考，不能替换图片1的内部结构。" : "仅有内部结构图，没有其他风格参考图。",
+      trimmedPrompt ? `用户要求：${trimmedPrompt}` : "围绕结构图设计统一的新外壳，真实材质，干净背景。"
+    ].join("\n");
   }
 
   if (options.hasProductImage && options.hasReference) {

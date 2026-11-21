@@ -243,9 +243,9 @@ export function ControlPanel(props: ControlPanelProps) {
           onChange={props.setUploadedImage}
           onError={props.onError}
           title="产品图"
-          emptyTitle={props.productInputMode === "sketch" ? "上传设计草图，生成完整效果图" : "可上传产品原图，进行结构延展"}
-          helperText={props.productInputMode === "sketch" ? "严格保留草图轮廓、比例、结构分区与核心设计特征" : "选填。上传后会优先走图生图；不上传时也可仅靠提示词生成"}
-          imageAlt={props.productInputMode === "sketch" ? "上传的设计草图" : "上传的产品原图"}
+          emptyTitle={props.productInputMode === "structure" ? "上传内部结构图，设计全新外壳" : props.productInputMode === "sketch" ? "上传设计草图，生成完整效果图" : "可上传产品原图，进行结构延展"}
+          helperText={props.productInputMode === "structure" ? "保留器件体量、相对位置与功能空间，不沿用结构件外形；实际装配需 CAD 验证" : props.productInputMode === "sketch" ? "严格保留草图轮廓、比例、结构分区与核心设计特征" : "选填。上传后会优先走图生图；不上传时也可仅靠提示词生成"}
+          imageAlt={props.productInputMode === "structure" ? "上传的内部结构图" : props.productInputMode === "sketch" ? "上传的设计草图" : "上传的产品原图"}
           inputMode={props.productInputMode}
           onInputModeChange={props.setProductInputMode}
         />
@@ -260,7 +260,7 @@ export function ControlPanel(props: ControlPanelProps) {
           <div>
             <span className="text-sm font-medium text-slate-200">创新度</span>
             <div className="mt-1 flex items-baseline justify-between gap-3">
-              <p className="text-xs text-slate-500">控制产品结构的延续与重构幅度</p>
+              <p className="text-xs text-slate-500">{props.productInputMode === "structure" ? "仅控制外壳创新幅度，内部布局保持不变" : "控制产品结构的延续与重构幅度"}</p>
               <span className="shrink-0 text-sm text-white">{props.innovationLevel}%</span>
             </div>
           </div>
@@ -276,7 +276,7 @@ export function ControlPanel(props: ControlPanelProps) {
             aria-label="创新度"
           />
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>结构延续</span>
+            <span>{props.productInputMode === "structure" ? "简洁包覆" : "结构延续"}</span>
             <span>自由创新</span>
           </div>
         </div>

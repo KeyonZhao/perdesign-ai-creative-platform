@@ -830,7 +830,8 @@ export default function Home() {
           model: BRAIN_MODEL,
           productName: productName.trim(),
           userPrompt: requirement,
-          productImageBase64: productInputMode === "product" ? subjectImageForOptimization : undefined,
+          productInputMode,
+          productImageBase64: productInputMode !== "sketch" ? subjectImageForOptimization : undefined,
           sketchImageBase64: productInputMode === "sketch" ? subjectImageForOptimization : undefined,
           referenceImageBase64s: referenceImagesForOptimization,
           innovationLevel
@@ -908,8 +909,9 @@ export default function Home() {
 
     await runGeneration({
       productName: productName.trim(),
+      productInputMode,
       sketchImage: productInputMode === "sketch" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
-      productImage: productInputMode === "product" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
+      productImage: productInputMode !== "sketch" && uploadedImage ? { name: uploadedImage.name, dataUrl: uploadedImage.dataUrl } : undefined,
       referenceImages: referenceImages.map((image) => ({ name: image.name, dataUrl: image.dataUrl })),
       innovationLevel,
       requirement,
@@ -953,6 +955,7 @@ export default function Home() {
   }
 
   async function runGeneration(params: {
+    productInputMode?: ProductInputMode;
     productName?: string;
     sketchImage?: GenerationSourceImage;
     productImage?: GenerationSourceImage;
@@ -1025,6 +1028,7 @@ export default function Home() {
       results: [],
       metadata: {
         productName: params.productName,
+        productInputMode: params.productInputMode,
         imageModel: selectedImageModel,
         generationStartedAt,
         expectedResultCount: params.count,
@@ -1066,6 +1070,7 @@ export default function Home() {
             brainModel: BRAIN_MODEL,
             imageModel: selectedImageModel,
             productName: params.productName,
+            productInputMode: params.productInputMode,
             sketchImageBase64: preparedSketchImageBase64,
             imageBase64: preparedProductImageBase64,
             maskImageBase64: params.maskImageBase64,
