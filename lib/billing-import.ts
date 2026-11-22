@@ -13,6 +13,12 @@ function reconcileRecord(a: BillingRecord, b: BillingRecord): BillingRecord | nu
   if (a.requestId !== b.requestId || a.model !== b.model || a.ua !== b.ua ||
     (a.requestedModel && b.requestedModel && a.requestedModel !== b.requestedModel)) return null;
   if (a.costNano === b.costNano && a.time === b.time && a.status === b.status) return a;
+  // Repeated unpriced failures may differ only in attempt time. Keep the latest
+  // failure without treating an absent fee as zero or merging different states.
+  if (a.costNano === null && b.costNano === null && a.status === b.status && /^[45]\d\d$/.test(a.status)) {
+    const latest = Date.parse(a.time) >= Date.parse(b.time) ? a : b;
+    return { ...latest, requestedModel: a.requestedModel || b.requestedModel };
+  }
   if ((a.costNano === null) === (b.costNano === null)) return null;
   const known = a.costNano !== null ? a : b;
   const unknown = a.costNano === null ? a : b;
@@ -83,7 +89,8 @@ export async function importBilling(csv: string, filename: string, userId: strin
       if (record.costNano === null) summary.missingCost++;
       const [existing] = await q("SELECT * FROM account_bills WHERE request_id=$1", [record.requestId]);
       const fillsMissingCost = existing && existing.cost_nano === null && record.costNano !== null;
-      if (existing && !reconcileRecord({ requestId: String(existing.request_id), model: String(existing.model), requestedModel: "", costNano: existing.cost_nano === null ? null : Number(existing.cost_nano), time: String(existing.billed_at), ua: String(existing.user_agent), status: String(existing.status) }, record)) throw new AccountError("这份账单与已导入的同一请求记录内容不一致，已停止导入，请核对原始账单。");
+      const resolved = existing ? reconcileRecord({ requestId: String(existing.request_id), model: String(existing.model), requestedModel: "", costNano: existing.cost_nano === null ? null : Number(existing.cost_nano), time: String(existing.billed_at), ua: String(existing.user_agent), status: String(existing.status) }, record) : record;
+      if (!resolved) throw new AccountError("这份账单与已导入的同一请求记录内容不一致，已停止导入，请核对原始账单。");
       let callId = existing?.call_id || await matchCall(q, record);
       if(callId && claimedCalls.has(callId)) callId=null;
       if(callId) claimedCalls.add(callId);
@@ -94,6 +101,11 @@ export async function importBilling(csv: string, filename: string, userId: strin
           total += BigInt(record.costNano!);
           if (total > BigInt(Number.MAX_SAFE_INTEGER)) throw new AccountError("费用汇总超出可核算范围。");
           if (commit) await q("UPDATE account_bills SET cost_nano=$1,status=$2,imported_at=$3,import_id=$4,billed_at=$6 WHERE request_id=$5", [record.costNano,record.status,now,importId,record.requestId,record.time]);
+        }
+        // Advance only an unpriced failure's timestamp; never downgrade a paid
+        // result or add a second bill when overlapping exports are imported.
+        if (commit && existing.cost_nano === null && resolved.costNano === null && resolved.time !== String(existing.billed_at)) {
+          await q("UPDATE account_bills SET billed_at=$1,imported_at=$2,import_id=$3 WHERE request_id=$4", [resolved.time,now,importId,record.requestId]);
         }
         if (!existing.call_id && callId) {
           summary.relinked++;

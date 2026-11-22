@@ -273,6 +273,85 @@ test("November 17 retry export imports and replays without duplicate charges",as
   assert.deepEqual(await query("SELECT COUNT(*) n, SUM(cost_nano) cost FROM account_bills"),before);
 });
 
+test("repeated unpriced failures resolve to the latest timestamp in either row order",async()=>{
+  for(const latestFirst of [true,false]) {
+    const id=randomUUID(),early=retryBill(id,false),late=early.replace("06:19:16","06:19:30");
+    const input=latestFirst?late+early.split("\n")[1]+"\n":early+late.split("\n")[1]+"\n";
+    const records=parseBillingCsv(input);
+    assert.equal(records.length,2);
+    for(const record of records) {
+      assert.equal(record.costNano,null);assert.equal(record.status,"502");
+      assert.equal(record.time,"2026-11-11T06:19:30.000Z");
+    }
+    const preview=await importBilling(input,"failures.csv",admin.user.id,false);
+    assert.equal(preview.added,1);assert.equal(preview.duplicates,1);assert.equal(preview.missingCost,1);
+    assert.equal(preview.addedCost,"0.000000000");
+    assert.equal((await query("SELECT * FROM account_bills WHERE request_id=$1",[id])).length,0);
+    await importBilling(input,"failures.csv",admin.user.id,true);
+    const bill=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];
+    assert.equal(bill.cost_nano,null);assert.equal(bill.billed_at,"2026-11-11T06:19:30.000Z");
+    const repeat=await importBilling(input,"failures-repeat.csv",admin.user.id,true);
+    assert.equal(repeat.added,0);assert.equal(repeat.duplicates,2);assert.equal(repeat.updatedCosts,0);
+    assert.deepEqual((await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0],bill);
+  }
+});
+
+test("overlapping unpriced failures advance once and still allow a later success fee",async()=>{
+  for(const latestFirst of [true,false]) {
+    const id=randomUUID(),early=retryBill(id,false),late=early.replace("06:19:16","06:19:30");
+    await importBilling(latestFirst?late:early,"first-failure.csv",admin.user.id,true);
+    const before=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];
+    await importBilling(latestFirst?early:late,"second-failure.csv",admin.user.id,false);
+    assert.deepEqual((await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0],before);
+    const next=await importBilling(latestFirst?early:late,"second-failure.csv",admin.user.id,true);
+    assert.equal(next.added,0);assert.equal(next.duplicates,1);assert.equal(next.updatedCosts,0);
+    assert.equal(next.missingCost,1);assert.equal(next.addedCost,"0.000000000");
+    const latest=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];
+    assert.equal(latest.cost_nano,null);assert.equal(latest.billed_at,"2026-11-11T06:19:30.000Z");
+    const filled=await importBilling(retryBill(id,true),"success.csv",admin.user.id,true);
+    assert.equal(filled.updatedCosts,1);assert.equal(filled.addedCost,"0.180000000");
+    const paid=(await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0];
+    await importBilling(early+late.split("\n")[1]+"\n","old-failures.csv",admin.user.id,true);
+    assert.deepEqual((await query("SELECT * FROM account_bills WHERE request_id=$1",[id]))[0],paid);
+  }
+});
+
+test("unpriced retry merging does not relax identity, status or known-fee conflicts",async()=>{
+  const id=randomUUID(),early=retryBill(id,false),late=early.replace("06:19:16","06:19:30");
+  for(const conflict of [late.replace("retry-image","other-model"),late.replace("external","other-source"),
+    late.replace(",502",",500"),late.replace(",502",",200"),late.replace(",,502",",0,502")]) {
+    assert.throws(()=>parseBillingCsv(early+conflict.split("\n")[1]+"\n"),/不同内容/);
+  }
+  const success=retryBill(randomUUID(),true,"").replace(",502",",200");
+  assert.throws(()=>parseBillingCsv(success+success.replace("06:19:52","06:20:00").split("\n")[1]+"\n"),/不同内容/);
+  const withRequested=(input:string,model:string)=>input.replace("cost_usd,status","cost_usd,status,requested_model").replace(",502\n",`,502,${model}\n`);
+  const first=withRequested(early,"requested-a"),second=withRequested(late,"");
+  const combined=first+second.split("\n")[1]+"\n";
+  assert.equal(parseBillingCsv(combined)[0].requestedModel,"requested-a");
+  assert.throws(()=>parseBillingCsv(combined+withRequested(late.replace("06:19:30","06:19:40"),"requested-b").split("\n")[1]+"\n"),/不同内容/);
+  await importBilling(early,"failure.csv",admin.user.id,true);
+  const before=await query("SELECT * FROM account_bills ORDER BY request_id");
+  const conflicting=retryBill(randomUUID(),false)+late.replace("external","other-source").split("\n")[1]+"\n";
+  await assert.rejects(importBilling(conflicting,"conflict.csv",admin.user.id,true),/不一致/);
+  assert.deepEqual(await query("SELECT * FROM account_bills ORDER BY request_id"),before);
+});
+
+test("November 22 export imports and replays without duplicate bills or charges",async(t)=>{
+  const file=process.env.PINWU_BILLING_NOV22_CSV;
+  if(!file){t.skip("Private CSV regression is opt-in");return;}
+  const text=await readFile(file,"utf8"),records=parseBillingCsv(text);
+  assert.equal(records.length,7113);assert.equal(new Set(records.map(r=>r.requestId)).size,7085);
+  assert.equal(records[5494].requestId,records[5495].requestId);
+  assert.equal(records[5495].costNano,null);assert.equal(records[5495].status,"500");
+  assert.equal(records[5495].time,"2026-10-27T07:14:39.037Z");
+  const first=await importBilling(text,"nov22.csv",admin.user.id,true);
+  const before=await query("SELECT COUNT(*) n, SUM(cost_nano) cost FROM account_bills");
+  const repeat=await importBilling(text,"nov22-repeat.csv",admin.user.id,true);
+  assert.equal(first.rows,7113);assert.equal(repeat.added,0);assert.equal(repeat.duplicates,7113);
+  assert.equal(repeat.updatedCosts,0);assert.equal(repeat.addedCost,"0.000000000");
+  assert.deepEqual(await query("SELECT COUNT(*) n, SUM(cost_nano) cost FROM account_bills"),before);
+});
+
 test("creating and resetting accounts accepts 8 characters and rejects shorter or oversized passwords",async()=>{
   for(const value of ["short77","x".repeat(129)]) {
     const response=await addUser(request("/api/admin/users",admin,{username:"eight-test",displayName:"密码长度测试",password:value}));
