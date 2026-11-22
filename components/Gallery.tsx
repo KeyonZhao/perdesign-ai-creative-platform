@@ -23,6 +23,7 @@ type GalleryProps = {
   count: number;
   onGenerateMultiView: (result: GenerationResult) => void;
   onGenerateScene: (result: GenerationResult) => void;
+  onGenerateWhiteBackground: (result: GenerationResult) => void;
   onGenerateEcommercePoster: (result: GenerationResult, productName?: string, instruction?: string) => void;
   onGenerateDivergence: (
     result: GenerationResult,
@@ -66,6 +67,7 @@ export function Gallery({
   onSuccess,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateWhiteBackground,
   onGenerateEcommercePoster,
   onGenerateDivergence,
   onGenerateFromPrompt,
@@ -394,6 +396,13 @@ export function Gallery({
           setPreviewMetadata(null);
           setPreviewStartsEditing(false);
         }}
+        onGenerateWhiteBackground={(result) => {
+          onGenerateWhiteBackground(result);
+          setPreview(null);
+          setPreviewMetadata(null);
+          setPreviewStartsEditing(false);
+          setPreviewStartsModel(false);
+        }}
         onGenerateEcommercePoster={(result, instruction) => {
           onGenerateEcommercePoster(result, previewMetadata?.productName, instruction);
           setPreview(null);
@@ -490,6 +499,11 @@ export function Gallery({
           onGenerateScene={(request) => {
             setCustomEditorOpen(false);
             onGenerateScene(createCustomResult(request));
+          }}
+          onGenerateWhiteBackground={(request) => {
+            setCustomEditorOpen(false);
+            setCustomSourceImage(null);
+            onGenerateWhiteBackground(createCustomResult(request));
           }}
           onGenerateEcommercePoster={(request, instruction) => {
             setCustomEditorOpen(false);

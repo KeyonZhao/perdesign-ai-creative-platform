@@ -47,6 +47,7 @@ import { convertImageDataUrlToPng, prepareImageForVision, prepareLocalEditImages
 import { extractPdfTextInBrowser } from "@/lib/client-pdf";
 import { buildCreativeDivergencePrompt } from "@/lib/creative-divergence";
 import { buildEcommercePosterPrompt } from "@/lib/ecommerce-poster";
+import { buildWhiteBackgroundGeneration } from "@/lib/white-background";
 import { downloadResearchWord } from "@/lib/research-word";
 import {
   addPendingImageJob,
@@ -1177,6 +1178,20 @@ export default function Home() {
       activeGenerationRunsRef.current = Math.max(0, activeGenerationRunsRef.current - 1);
       setStatus(activeGenerationRunsRef.current > 0 ? "generating" : "error");
       pushToast("error", error instanceof Error ? error.message : "生成失败，请检查配置后重试。");
+    }
+  }
+
+  async function generateWhiteBackground(result: GenerationResult) {
+    if (!ensureAuthorized()) return;
+    if (!isLocalHistoryReady) return pushToast("info", "正在恢复本地作品，请稍候再生成。");
+    const config = getResolvedConfig();
+    if (!config.imageApiKey || !config.imageApiBaseUrl) {
+      return pushToast("error", "请重新登录或联系管理员检查服务配置。");
+    }
+    try {
+      await runGeneration(buildWhiteBackgroundGeneration(result));
+    } catch (error) {
+      pushToast("error", error instanceof Error ? error.message : "白底图生成失败，请稍后重试。");
     }
   }
 
@@ -2411,6 +2426,7 @@ export default function Home() {
                     isGeneratingVariant={status === "generating" || status === "optimizing"}
                     onGenerateMultiView={generateMultiView}
                     onGenerateScene={generateScene}
+                    onGenerateWhiteBackground={generateWhiteBackground}
                     onGenerateEcommercePoster={generateEcommercePoster}
                     onGenerateDivergence={generateDivergence}
                     onGenerateFromPrompt={generateFromImagePrompt}

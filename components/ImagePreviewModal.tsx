@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
+import { Box, Check, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eraser, FileText, LoaderCircle, Maximize2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Square, Trash2, UploadCloud, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { imageModels } from "@/lib/models";
 import type { CreativeDivergenceRequest, DivergenceExplorationLevel, DivergenceMode, DivergenceStyleId, GenerationMetadata, GenerationResult, GenerationSourceImage, VideoGenerationRequest } from "@/lib/types";
@@ -18,6 +18,7 @@ type ImagePreviewModalProps = {
   isGeneratingDesignDescription?: boolean;
   onGenerateMultiView?: (result: GenerationResult) => void;
   onGenerateScene?: (result: GenerationResult) => void;
+  onGenerateWhiteBackground?: (result: GenerationResult) => void;
   onGenerateEcommercePoster?: (result: GenerationResult, instruction?: string) => void;
   onGenerateDivergence?: (
     result: GenerationResult,
@@ -61,6 +62,7 @@ export function ImagePreviewModal({
   onClose,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateWhiteBackground,
   onGenerateEcommercePoster,
   onGenerateDivergence,
   onGenerateFromPrompt,
@@ -437,6 +439,7 @@ export function ImagePreviewModal({
   const hasInnovationValue =
     Boolean(metadata) &&
     metadata?.generationType !== "scene" &&
+    metadata?.generationType !== "white-background" &&
     metadata?.generationType !== "multi-view" &&
     metadata?.generationType !== "ecommerce-poster" &&
     metadata?.generationType !== "divergence";
@@ -1061,6 +1064,19 @@ export function ImagePreviewModal({
               <Mountain className="h-4 w-4" />
               <span>{isGeneratingVariant ? "生成中" : "生成场景图"}</span>
             </button>
+            {onGenerateWhiteBackground ? (
+              <button
+                type="button"
+                className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() => onGenerateWhiteBackground(result)}
+                disabled={isGeneratingVariant || isEditing || isAnnotating || isUpscaling || !result.imageBase64}
+                title="生成白底图，保留产品外观并另存为新图片"
+                aria-label="生成白底图"
+              >
+                <Square className="h-4 w-4" fill="currentColor" />
+                <span>生成白底图</span>
+              </button>
+            ) : null}
             <button
               data-preview-panel-trigger="ecommerce"
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isEcommercePanelOpen ? "active" : ""}`}

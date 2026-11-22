@@ -76,6 +76,7 @@ export type GenerationType =
   | "local-edit"
   | "image-prompt"
   | "upscale"
+  | "white-background"
   | "video";
 
 export type GenerationMetadata = {

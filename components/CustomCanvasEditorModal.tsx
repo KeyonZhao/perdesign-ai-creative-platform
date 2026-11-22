@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Box, ChevronUp, Clapperboard, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Trash2, UploadCloud, Wand2, X } from "lucide-react";
+import { Box, ChevronUp, Clapperboard, Download, Loader2, Mountain, Paintbrush, Plus, Rotate3D, RotateCcw, ScanLine, SendHorizontal, ShoppingBag, Sparkles, Square, Trash2, UploadCloud, Wand2, X } from "lucide-react";
 import { DIVERGENCE_STYLES } from "@/lib/creative-divergence";
 import { downloadDataUrl, getGalleryDraggedImage } from "@/lib/image";
 import type { CreativeDivergenceRequest, CustomCanvasGenerationRequest, DivergenceExplorationLevel, DivergenceMode, DivergenceStyleId, GenerationSourceImage, GenerationStatus, UploadedImage, VideoGenerationRequest } from "@/lib/types";
@@ -24,6 +24,7 @@ type CustomCanvasEditorModalProps = {
   onOpenLocalEdit: (request: CustomCanvasGenerationRequest) => void;
   onGenerateMultiView: (request: CustomCanvasGenerationRequest) => void;
   onGenerateScene: (request: CustomCanvasGenerationRequest) => void;
+  onGenerateWhiteBackground: (request: CustomCanvasGenerationRequest) => void;
   onGenerateEcommercePoster: (request: CustomCanvasGenerationRequest, instruction?: string) => void;
   onGenerateVideo: (request: CustomCanvasGenerationRequest, videoRequest: VideoGenerationRequest) => void;
   onUpscale: (request: CustomCanvasGenerationRequest) => void;
@@ -46,6 +47,7 @@ export function CustomCanvasEditorModal({
   onOpenLocalEdit,
   onGenerateMultiView,
   onGenerateScene,
+  onGenerateWhiteBackground,
   onGenerateEcommercePoster,
   onGenerateVideo,
   onUpscale,
@@ -334,6 +336,21 @@ export function CustomCanvasEditorModal({
             >
               <Mountain className="h-4 w-4" />
               <span>生成场景图</span>
+            </button>
+            <button
+              type="button"
+              className="btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => {
+                const request = getCurrentRequest();
+                if (!request) return;
+                onGenerateWhiteBackground(request);
+              }}
+              disabled={!sourceImage || busy}
+              title="生成白底图，保留产品外观并另存为新图片"
+              aria-label="生成白底图"
+            >
+              <Square className="h-4 w-4" fill="currentColor" />
+              <span>生成白底图</span>
             </button>
             <button
               className={`btn-secondary image-preview-action disabled:cursor-not-allowed disabled:opacity-45 ${isEcommercePanelOpen ? "active" : ""}`}
