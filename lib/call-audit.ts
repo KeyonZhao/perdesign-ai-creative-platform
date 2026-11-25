@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { query } from "./account-db";
 import { accountError, AccountError, requireAccount, requireSameOrigin, type Account } from "./accounts";
+import { emergencyMode, ownsEmergencyResource, attachEmergencyResource } from "./emergency-access";
 
 type Context = { user: Account; taskId: string; feature: string; calls: string[] };
 const globalAudit = globalThis as typeof globalThis & { pinwuAuditContext?: AsyncLocalStorage<Context> };
@@ -20,6 +21,29 @@ export function withAccount(handler: (request: Request) => Promise<Response>) {
       requireSameOrigin(request);
       const user = await requireAccount(request);
       const pathname = new URL(request.url).pathname;
+      // Explicit incident mode: authenticated work continues without a single DB query.
+      // Signed, browser-bound receipts retain ownership checks for newly created tasks.
+      if (emergencyMode()) {
+        const family=pathname.split("/").slice(0,-1).join("/");
+        if(pathname.endsWith("/status")) {
+          const body=request.method==="GET"?Object.fromEntries(new URL(request.url).searchParams):await request.clone().json();
+          const resource=`${family}:${body.jobId||body.taskId||""}`;
+          if(!ownsEmergencyResource(request,user.id,resource))throw new AccountError("此任务不是当前临时工作区创建的，请重新提交。",403);
+        }
+        if(pathname==="/api/tripo/model"&&!ownsEmergencyResource(request,user.id,new URL(request.url).searchParams.get("url")||""))throw new AccountError("无权读取此模型。",403);
+        const response=await handler(request);
+        if(response.ok&&response.headers.get("content-type")?.includes("application/json")) {
+          const result=await response.clone().json().catch(()=>null);
+          const jobId=result?.jobId||result?.taskId;
+          if(jobId&&!pathname.endsWith("/status")) {
+            const taskFamily=pathname.endsWith("/generate")&&pathname!=="/api/generate"?family:pathname.endsWith("/convert")?family:pathname;
+            attachEmergencyResource(response,request,user.id,`${taskFamily}:${jobId}`);
+          }
+          if(result?.modelUrl)attachEmergencyResource(response,request,user.id,result.modelUrl);
+        }
+        response.headers.set("Cache-Control","no-store");
+        return response;
+      }
       const taskId = randomUUID();
       const scope: Context = { user, taskId, feature: features[pathname] || pathname, calls: [] };
       let ownedCallId: string | undefined;

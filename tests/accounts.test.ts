@@ -22,6 +22,7 @@ function request(route:string,account:any,body?:unknown) {
   return new Request(origin+route,{method:body===undefined?"GET":"POST",headers:{origin,cookie:account?`pinwu_session=${account.token}`:"","content-type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});
 }
 before(async()=>{
+  process.env.PINWU_ACCOUNT_MODE="accounts";
   delete process.env.DATABASE_URL;delete process.env.POSTGRES_URL;delete process.env.VERCEL;delete process.env.PINWU_PRIVATE_BLOB_TOKEN;delete process.env.PINWU_APP_ORIGIN;
   process.env.PINWU_LOCAL_DATA_DIR=await mkdtemp(path.join(tmpdir(),"pinwu-accounts-test-"));
   await createAccount("admin-test","测试管理员",password,"admin");

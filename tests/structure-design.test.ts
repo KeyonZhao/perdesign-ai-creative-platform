@@ -14,6 +14,7 @@ const image = "data:image/png;base64,c3RydWN0dXJl";
 const reference = "data:image/png;base64,cmVmZXJlbmNl";
 let token = "";
 before(async () => {
+  process.env.PINWU_ACCOUNT_MODE = "accounts";
   delete process.env.DATABASE_URL;
   delete process.env.POSTGRES_URL;
   delete process.env.VERCEL;

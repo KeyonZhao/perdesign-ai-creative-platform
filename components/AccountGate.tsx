@@ -13,6 +13,7 @@ export function useAccount() {
 }
 export function AccountGate({children}:{children:ReactNode}) {
   const [user,setUser]=useState<Account|null>(null);
+  const [emergency,setEmergency]=useState(false);
   const [ready,setReady]=useState(false);
   const [error,setError]=useState("");
   const [busy,setBusy]=useState(false);
@@ -49,7 +50,7 @@ export function AccountGate({children}:{children:ReactNode}) {
       try {
         const response=await fetch("/api/auth/me",{cache:"no-store"}); const body=await response.json();
         if(!response.ok) throw new Error(body.error||"账号服务暂时不可用。");
-        if(active) {acceptUser(body.user);setError("");}
+        if(active) {setEmergency(Boolean(body.emergency));acceptUser(body.user);setError("");}
       } catch(error) {if(active) setError(error instanceof Error?error.message:"无法连接账号服务。");}
       finally {if(active)setReady(true);}
     }
@@ -62,7 +63,7 @@ export function AccountGate({children}:{children:ReactNode}) {
   async function submit(event:FormEvent) {
     event.preventDefault();setBusy(true);setError("");setNotice("");
     try {
-      const registering=mode==="register";
+      const registering=!emergency&&mode==="register";
       const response=await fetch(registering?"/api/auth/register":"/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(registering?{username,displayName,password}:{username,password})});
       const body=await response.json(); if(!response.ok)throw new Error(body.error);
       setPassword("");
@@ -77,7 +78,15 @@ export function AccountGate({children}:{children:ReactNode}) {
     acceptUser(null);window.location.assign("/");
   }
   if(!ready) return <div className="account-login"><Loader2 className="animate-spin"/><span>正在检查登录状态</span></div>;
-  if(user) return <AccountContext.Provider value={{user,logout}}><div key={user.id}>{children}</div></AccountContext.Provider>;
+  if(user) return <AccountContext.Provider value={{user,logout}}><div key={user.id}>{emergency?<div role="status" style={{padding:"6px 16px",background:"#292332",color:"#e8dfff",fontSize:13,textAlign:"center"}}>临时工作模式 · 员工记账暂停 · 原账号与历史数据保留，新作品请及时下载</div>:null}{children}</div></AccountContext.Provider>;
+  if(emergency)return <main className="account-login"><form className="account-login-card" onSubmit={submit}>
+    <div className="account-login-icon"><LockKeyhole/></div><p className="account-eyebrow">PERDESIGN AI</p><h1>临时工作入口</h1>
+    <p className="account-muted">账号服务维护中，输入公司内部临时访问码即可继续使用。原有账号、账单与本机历史不会删除。</p>
+    <label>临时访问码<input type="password" autoComplete="off" value={password} onChange={e=>setPassword(e.target.value)} required maxLength={128} placeholder="输入临时访问码"/></label>
+    {error?<p role="alert" className="account-error">{error}</p>:null}
+    <button className="account-primary" disabled={busy}>{busy?"正在进入":"进入工作台"}</button>
+    <p className="account-footnote">临时工作区与原账号历史隔离；本阶段不记录员工费用，请下载保存重要成果。</p>
+  </form></main>;
   return <main className="account-login"><form className="account-login-card" onSubmit={submit}>
     <div className="account-login-icon"><LockKeyhole/></div><p className="account-eyebrow">PERDESIGN AI</p><h1>{mode==="register"?"注册品物创意平台":"登录品物创意平台"}</h1><p className="account-muted">{mode==="register"?"填写以下信息提交申请，管理员批准后即可使用。":"登录已有账号，或注册账号后等待管理员批准。"}</p>
     {notice?<p role="status" className="admin-notice">{notice}</p>:null}

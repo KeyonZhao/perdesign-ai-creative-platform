@@ -89,5 +89,5 @@ async function handlePOST(request: Request) {
 
 function isRetryable(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /server_error|upstream|temporarily|overload|rate.?limit|too many requests|concurrency|timeout|abort|超时|繁忙|过载|限流/i.test(message);
+  return /server_error|upstream|temporarily|overload|rate.?limit|too many requests|concurrency|timeout|abort|not authorized for model|model.*(?:not found|unavailable|not supported)|无权.*模型|模型.*(?:无权限|不可用)|超时|繁忙|过载|限流/i.test(message);
 }

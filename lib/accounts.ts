@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { query, transaction, type DbRow } from "./account-db";
+import { emergencyMode, emergencyUser } from "./emergency-access";
 
 export const SESSION_COOKIE = "pinwu_session";
 export type Account = { id: string; username: string; displayName: string; role: "admin" | "member" };
@@ -31,11 +32,13 @@ export function sessionToken(request: Request) {
 }
 export async function getAccount(request: Request): Promise<Account | null> {
   const token = sessionToken(request);
+  if (emergencyMode()) return emergencyUser(token);
   if (!/^[a-f0-9]{64}$/.test(token)) return null;
   const rows = await query("SELECT u.* FROM account_sessions s JOIN account_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>$2 AND u.active=1 AND u.approval_status='approved'", [hashToken(token), new Date().toISOString()]);
   return rows[0] ? publicAccount(rows[0]) : null;
 }
 export async function requireAccount(request: Request, admin = false) {
+  if (admin && emergencyMode()) throw new AccountError("临时工作模式期间，账号管理与账单后台暂停。原有数据保留。",503);
   const user = await getAccount(request);
   if (!user) throw new AccountError("登录已过期，请重新登录。", 401);
   const expectedUser=request.headers.get("x-pinwu-account");
@@ -81,6 +84,7 @@ export function accountError(error: unknown) {
 }
 
 export async function registerAccount(username:string, displayName:string, password:string, ip:string) {
+  if (emergencyMode()) throw new AccountError("临时工作模式期间暂停注册，请使用临时访问码。",503);
   validateUser(username,displayName,password);
   const now=new Date().toISOString();
   // Separate persistent budget; rejected/duplicate attempts also consume it.
